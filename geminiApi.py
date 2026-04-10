@@ -41,7 +41,7 @@ class GeminiWorker(QThread):
             method = "POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout = 30) as response:
+            with urllib.request.urlopen(request, timeout = 120) as response:
                 data = json.loads(response.read().decode("utf-8"))
             text = extractResponseText(data)
             self.success.emit(text.strip())

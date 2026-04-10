@@ -20,7 +20,7 @@ from .prompt import DEFAULT_PROMPT
 ADDON_MODULE: str = __name__.split('.')[0]
 
 DEFAULT_CONFIG: dict = {
-    'model': 'gemini-2.5-flash',
+    'model': 'gemini-3.1-flash-lite-preview',
     'customModelId': '',
     'apiKey': '',
     'defaultPrompt': DEFAULT_PROMPT,
