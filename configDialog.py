@@ -190,8 +190,8 @@ class ConfigDialog(QDialog):
         for index in range(1, self._cardTypeCombo.count()):
             key: str = self._cardTypeCombo.itemData(index) or ''
             baseLabel: str = self._cardTypeCombo.itemText(index)
-            if baseLabel.endswith(' (Customised Prompt)'):
-                baseLabel = baseLabel[: -len(' (Customised Prompt)')]
+            if baseLabel.endswith(' **Customised Prompt**'):
+                baseLabel = baseLabel[: -len(' **Customised Prompt**')]
             if self._tempPrompts.get(key, ''):
                 self._cardTypeCombo.setItemText(index, baseLabel + ' **Customised Prompt**')
             else:
