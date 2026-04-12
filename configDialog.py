@@ -23,8 +23,11 @@ DEFAULT_CONFIG: dict = {
     'model': 'gemini-3.1-flash-lite-preview',
     'customModelId': '',
     'apiKey': '',
-    'defaultPrompt': DEFAULT_PROMPT,
-    'cardTypePrompts': {},
+    'prompts': {
+        'default': DEFAULT_PROMPT,
+        'decks': {},
+        'cardTypes': {},
+    },
 }
 
 MODELS: list[str] = [
@@ -38,11 +41,25 @@ MODELS: list[str] = [
 
 MODEL_KEY_TO_INDEX: dict[str, int] = {key: index for index, key in enumerate(MODELS)}
 
-DEFAULT_CARD_TYPE_KEY: str = '__default__'
+DEFAULT_PROMPT_SETTINGS_KEY: str = '__default__'
+DECK_KEY_PREFIX: str = 'deck::'
+CARD_TYPE_KEY_PREFIX: str = 'cardType::'
 
 
 def hasTypedAnswer(template: dict) -> bool:
     return '{{type:' in template.get('qfmt', '') or '{{type:' in template.get('afmt', '')
+
+
+def getDecks() -> list[tuple[str, str]]:
+    if not mw.col:
+        return []
+    result: list[tuple[str, str]] = []
+    for deck in mw.col.decks.all():
+        deckName: str = deck['name']
+        label = f'[Deck] {deckName}'
+        result.append((label, deckName))
+    result.sort(key = lambda x: x[0])
+    return result
 
 
 def getCardTypes() -> list[tuple[str, str]]:
@@ -68,7 +85,7 @@ class ConfigDialog(QDialog):
         self.setMinimumWidth(520)
         self._config: dict = mw.addonManager.getConfig(ADDON_MODULE) or {}
         self._tempPrompts: dict[str, str] = {}
-        self._previousCardTypeIndex: int = 0
+        self._previousPromptSettingsIndex: int = 0
         self._buildUi()
         self._loadValues()
         self._connectSignals()
@@ -118,7 +135,7 @@ class ConfigDialog(QDialog):
     def _buildPromptSection(self) -> QGroupBox:
         box = QGroupBox('Prompt Configuration')
         layout = QVBoxLayout(box)
-        layout.addLayout(self._buildCardTypeRow())
+        layout.addLayout(self._buildPromptSettingsRow())
         self._customPromptCheck = QCheckBox('Customised prompt')
         layout.addWidget(self._customPromptCheck)
         self._promptEdit = QTextEdit()
@@ -129,14 +146,16 @@ class ConfigDialog(QDialog):
         layout.addWidget(self._promptEdit)
         return box
 
-    def _buildCardTypeRow(self) -> QHBoxLayout:
+    def _buildPromptSettingsRow(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self._cardTypeCombo = QComboBox()
-        self._cardTypeCombo.addItem('Default')
-        for (label, key) in getCardTypes():
-            self._cardTypeCombo.addItem(label, userData = key)
-        row.addWidget(QLabel('Card type:'))
-        row.addWidget(self._cardTypeCombo)
+        self._promptSettingsCombo = QComboBox()
+        self._promptSettingsCombo.addItem('Default')
+        for (label, deckName) in getDecks():
+            self._promptSettingsCombo.addItem(label, userData = f'{DECK_KEY_PREFIX}{deckName}')
+        for (label, cardTypeKey) in getCardTypes():
+            self._promptSettingsCombo.addItem(label, userData = f'{CARD_TYPE_KEY_PREFIX}{cardTypeKey}')
+        row.addWidget(QLabel('Prompt Settings:'))
+        row.addWidget(self._promptSettingsCombo)
         return row
 
     def _buildResetSection(self) -> QGroupBox:
@@ -157,20 +176,20 @@ class ConfigDialog(QDialog):
 
     def _connectSignals(self) -> None:
         self._modelCombo.currentIndexChanged.connect(self._onModelChanged)
-        self._cardTypeCombo.currentIndexChanged.connect(self._onCardTypeChanged)
+        self._promptSettingsCombo.currentIndexChanged.connect(self._onPromptSettingsChanged)
         self._customPromptCheck.stateChanged.connect(self._onCustomPromptCheckChanged)
 
     def _onModelChanged(self, index: int) -> None:
         self._customModelWidget.setVisible(self._modelCombo.currentText() == 'Custom')
 
-    def _onCardTypeChanged(self, index: int) -> None:
-        self._persistPromptForIndex(self._previousCardTypeIndex)
-        self._updateCardTypeLabels()
-        self._previousCardTypeIndex = index
+    def _onPromptSettingsChanged(self, index: int) -> None:
+        self._persistPromptForIndex(self._previousPromptSettingsIndex)
+        self._updatePromptSettingsLabels()
+        self._previousPromptSettingsIndex = index
         self._refreshPromptArea()
 
     def _onCustomPromptCheckChanged(self, state: int) -> None:
-        key = self._currentCardTypeKey()
+        key = self._currentPromptSettingsKey()
         if not key:
             return
         if self._customPromptCheck.isChecked():
@@ -184,27 +203,30 @@ class ConfigDialog(QDialog):
             self._tempPrompts.pop(key, None)
             self._promptEdit.setEnabled(False)
             self._promptEdit.setPlainText('')
-        self._updateCardTypeLabels()
+        self._updatePromptSettingsLabels()
 
-    def _updateCardTypeLabels(self) -> None:
-        for index in range(1, self._cardTypeCombo.count()):
-            key: str = self._cardTypeCombo.itemData(index) or ''
-            baseLabel: str = self._cardTypeCombo.itemText(index)
+    def _updatePromptSettingsLabels(self) -> None:
+        for index in range(1, self._promptSettingsCombo.count()):
+            key: str = self._promptSettingsCombo.itemData(index) or ''
+            baseLabel: str = self._promptSettingsCombo.itemText(index)
             if baseLabel.endswith(' **Customised Prompt**'):
                 baseLabel = baseLabel[: -len(' **Customised Prompt**')]
             if self._tempPrompts.get(key, ''):
-                self._cardTypeCombo.setItemText(index, baseLabel + ' **Customised Prompt**')
+                self._promptSettingsCombo.setItemText(index, baseLabel + ' **Customised Prompt**')
             else:
-                self._cardTypeCombo.setItemText(index, baseLabel)
+                self._promptSettingsCombo.setItemText(index, baseLabel)
 
     def _isDefaultSelected(self) -> bool:
-        return self._cardTypeCombo.currentIndex() == 0
+        return self._promptSettingsCombo.currentIndex() == 0
 
-    def _currentCardTypeKey(self) -> str:
-        return self._cardTypeCombo.currentData() or ''
+    def _currentPromptSettingsKey(self) -> str:
+        return self._promptSettingsCombo.currentData() or ''
 
     def _getDefaultPromptText(self) -> str:
-        return self._tempPrompts.get(DEFAULT_CARD_TYPE_KEY, self._config.get('defaultPrompt', DEFAULT_PROMPT))
+        return self._tempPrompts.get(
+            DEFAULT_PROMPT_SETTINGS_KEY,
+            self._config.get('prompts', {}).get('default', DEFAULT_PROMPT)
+        )
 
     def _refreshPromptArea(self) -> None:
         if self._isDefaultSelected():
@@ -216,7 +238,7 @@ class ConfigDialog(QDialog):
             self._promptEdit.setPlainText(self._getDefaultPromptText())
             return
 
-        key = self._currentCardTypeKey()
+        key = self._currentPromptSettingsKey()
         hasCustom = bool(self._tempPrompts.get(key, ''))
         self._customPromptCheck.setEnabled(True)
         self._customPromptCheck.blockSignals(True)
@@ -232,10 +254,10 @@ class ConfigDialog(QDialog):
 
     def _persistPromptForIndex(self, index: int) -> None:
         if index == 0:
-            self._tempPrompts[DEFAULT_CARD_TYPE_KEY] = self._promptEdit.toPlainText()
+            self._tempPrompts[DEFAULT_PROMPT_SETTINGS_KEY] = self._promptEdit.toPlainText()
             return
 
-        key: str = self._cardTypeCombo.itemData(index) or ''
+        key: str = self._promptSettingsCombo.itemData(index) or ''
         if not key:
             return
 
@@ -250,32 +272,44 @@ class ConfigDialog(QDialog):
 
     def _loadValues(self) -> None:
         self._tempPrompts = {}
-        self._previousCardTypeIndex = 0
-        self._tempPrompts[DEFAULT_CARD_TYPE_KEY] = self._config.get('defaultPrompt', DEFAULT_PROMPT)
-        for (key, value) in self._config.get('cardTypePrompts', {}).items():
+        self._previousPromptSettingsIndex = 0
+        prompts: dict = self._config.get('prompts', {})
+        self._tempPrompts[DEFAULT_PROMPT_SETTINGS_KEY] = prompts.get('default', DEFAULT_PROMPT)
+        for (deckName, value) in prompts.get('decks', {}).items():
             if value:
-                self._tempPrompts[key] = value
+                self._tempPrompts[f'{DECK_KEY_PREFIX}{deckName}'] = value
+        for (cardTypeKey, value) in prompts.get('cardTypes', {}).items():
+            if value:
+                self._tempPrompts[f'{CARD_TYPE_KEY_PREFIX}{cardTypeKey}'] = value
 
-        self._modelCombo.setCurrentIndex(MODEL_KEY_TO_INDEX.get(self._config.get('model', 'gemini-2.5-flash'), 0))
+        self._modelCombo.setCurrentIndex(MODEL_KEY_TO_INDEX.get(self._config.get('model', 'gemini-3.1-flash-lite-preview'), 0))
         self._customModelEdit.setText(self._config.get('customModelId', ''))
         self._apiKeyEdit.setText(self._config.get('apiKey', ''))
         self._onModelChanged(self._modelCombo.currentIndex())
 
-        self._updateCardTypeLabels()
-        self._cardTypeCombo.setCurrentIndex(0)
+        self._updatePromptSettingsLabels()
+        self._promptSettingsCombo.setCurrentIndex(0)
         self._refreshPromptArea()
 
     def _saveAndClose(self) -> None:
-        self._persistPromptForIndex(self._cardTypeCombo.currentIndex())
+        self._persistPromptForIndex(self._promptSettingsCombo.currentIndex())
+        deckPrompts: dict[str, str] = {}
+        cardTypePrompts: dict[str, str] = {}
+        for (key, value) in self._tempPrompts.items():
+            if key == DEFAULT_PROMPT_SETTINGS_KEY or not value:
+                continue
+            if key.startswith(DECK_KEY_PREFIX):
+                deckPrompts[key[len(DECK_KEY_PREFIX):]] = value
+            elif key.startswith(CARD_TYPE_KEY_PREFIX):
+                cardTypePrompts[key[len(CARD_TYPE_KEY_PREFIX):]] = value
         newConfig = {
             'model': MODELS[self._modelCombo.currentIndex()],
             'customModelId': self._customModelEdit.text().strip(),
             'apiKey': self._apiKeyEdit.text().strip(),
-            'defaultPrompt': self._tempPrompts.get(DEFAULT_CARD_TYPE_KEY, DEFAULT_PROMPT),
-            'cardTypePrompts': {
-                key: value
-                for (key, value) in self._tempPrompts.items()
-                if key != DEFAULT_CARD_TYPE_KEY and value
+            'prompts': {
+                'default': self._tempPrompts.get(DEFAULT_PROMPT_SETTINGS_KEY, DEFAULT_PROMPT),
+                'decks': deckPrompts,
+                'cardTypes': cardTypePrompts,
             },
         }
         mw.addonManager.writeConfig(ADDON_MODULE, newConfig)

@@ -14,7 +14,7 @@ The AI response is rendered inline on the card — no separate window.
 - Keyboard shortcut **C** to trigger the check without using the mouse
 - Renders the AI response as formatted HTML (supports bold, italic, lists, code blocks, headers)
 - Shows a **Retry** button on API errors
-- Per-card-type prompt overrides — different note type/card combinations can use different prompts
+- Per-deck and per-card-type prompt overrides — different decks or note type/card combinations can use different prompts
 - Config dialog accessible from **Tools > Add-ons**
 
 ## Requirements
@@ -37,7 +37,16 @@ The AI response is rendered inline on the card — no separate window.
 | **Model** | Gemini model to use. Choose a preset or select **Custom** to enter any model ID. |
 | **Google AI Studio API key** | Your API key from [aistudio.google.com](https://aistudio.google.com/). |
 | **Default prompt** | The prompt template sent to Gemini for all cards unless overridden. |
-| **Per-card-type prompt** | Select a specific note type + card combination to set a custom prompt for it. |
+| **Per-deck prompt** | Select a deck from the Prompt Settings dropdown to set a custom prompt for all cards in that deck. |
+| **Per-card-type prompt** | Select a specific note type + card combination to set a custom prompt for it. Takes priority over deck-level prompts. |
+
+### Prompt resolution order
+
+When a card is checked, the prompt is selected in this priority order:
+
+1. **Card-type prompt** — if a custom prompt is set for the specific note type + card combination
+2. **Deck prompt** — if a custom prompt is set for the card's deck
+3. **Default prompt** — the fallback used when no override is configured
 
 ### Prompt templates
 

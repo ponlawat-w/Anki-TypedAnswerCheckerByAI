@@ -49,11 +49,18 @@ def resolveModelId(config: dict) -> str:
 
 
 def getPromptForCard(card: Card, config: dict) -> str:
+    prompts: dict = config.get('prompts', {})
     noteTypeName: str = card.note_type()['name']
     cardName: str = card.template()['name']
-    key = f'{noteTypeName}::{cardName}'
-    customPrompt: str = config.get('cardTypePrompts', {}).get(key, '')
-    return customPrompt if customPrompt else config.get('defaultPrompt', DEFAULT_PROMPT)
+    cardTypeKey = f'{noteTypeName}::{cardName}'
+    cardTypePrompt: str = prompts.get('cardTypes', {}).get(cardTypeKey, '')
+    if cardTypePrompt:
+        return cardTypePrompt
+    deckName: str = mw.col.decks.get(card.did)['name']
+    deckPrompt: str = prompts.get('decks', {}).get(deckName, '')
+    if deckPrompt:
+        return deckPrompt
+    return prompts.get('default', DEFAULT_PROMPT)
 
 
 def buildPrompt(card: Card, config: dict) -> str:

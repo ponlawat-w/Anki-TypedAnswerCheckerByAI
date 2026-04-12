@@ -21,6 +21,13 @@ def extractResponseText(data: dict) -> str:
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
+def extractHttpErrorMessage(code: int, body: str) -> str:
+    try:
+        return json.loads(body)["error"]["message"]
+    except Exception:
+        return f"HTTP {code}: {body}"
+
+
 class GeminiWorker(QThread):
     success = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -47,6 +54,6 @@ class GeminiWorker(QThread):
             self.success.emit(text.strip())
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors = "replace")
-            self.error.emit(f"HTTP {e.code}: {body}")
+            self.error.emit(extractHttpErrorMessage(e.code, body))
         except Exception as e:
             self.error.emit(str(e))

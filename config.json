@@ -2,6 +2,9 @@
   "model": "gemini-3.1-flash-lite-preview",
   "customModelId": "",
   "apiKey": "",
-  "defaultPrompt": "You are helping a student check their answer. Determine if the typed answer is acceptable as a correct answer, even if it is not word-for-word identical to the expected answer.\n\nQuestion: {{cardQuestion}}\nExpected answer: {{cardAnswer}}\nStudent's typed answer: {{userAnswer}}\n\nRespond with a brief explanation of whether the answer is acceptable and why. Keep it concise (2-3 sentences).",
-  "cardTypePrompts": {}
+  "prompts": {
+    "default": "You are helping a student check their answer. Determine if the typed answer is acceptable as a correct answer, even if it is not word-for-word identical to the expected answer.\n\nQuestion: {{cardQuestion}}\nExpected answer: {{cardAnswer}}\nStudent's typed answer: {{userAnswer}}\n\nRespond with a brief explanation of whether the answer is acceptable and why. Keep it concise (2-3 sentences).",
+    "decks": {},
+    "cardTypes": {}
+  }
 }
