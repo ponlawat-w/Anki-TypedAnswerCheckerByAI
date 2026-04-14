@@ -90,21 +90,31 @@ def setButtonChecking() -> None:
 
 def markdownToHtml(text: str) -> str:
     # Code blocks (must be processed before inline code)
-    text = re.sub(r'```.*?\n(.*?)```', lambda m: f'<pre><code>{m.group(1)}</code></pre>', text, flags=re.DOTALL)
+    text = re.sub(r'```.*?\n(.*?)```', lambda m: f'<pre><code>{m.group(1)}</code></pre>', text, flags = re.DOTALL)
     text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
     # Headers
-    text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
-    text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
-    text = re.sub(r'^# (.+)$', r'<h1>\1</h1>', text, flags=re.MULTILINE)
+    text = re.sub(r'^### (.+)$', r'<h4>\1</h4>', text, flags = re.MULTILINE)
+    text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags = re.MULTILINE)
+    text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags = re.MULTILINE)
+    text = re.sub(r'^# (.+)$', r'<h1>\1</h1>', text, flags = re.MULTILINE)
     # Bold and italic
     text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
     # Unordered lists
-    text = re.sub(r'(?:^[*\-] .+$\n?)+', lambda m: '<ul>' + re.sub(r'^[*\-] (.+)$', r'<li>\1</li>', m.group(0), flags=re.MULTILINE) + '</ul>', text, flags=re.MULTILINE)
+    text = re.sub(
+        r'(?:^[*\-] .+$\n?)+',
+        lambda m: '<ul>' + re.sub(r'^[*\-]\s+(.+)$', r'<li>\1</li>', m.group(0), flags = re.MULTILINE) + '</ul>',
+        text,
+        flags = re.MULTILINE
+    )
     # Line breaks
     text = re.sub(r'\n{2,}', '</p><p>', text)
     text = re.sub(r'\n', '<br>', text)
+    # Others
+    text = re.sub(r'^---$', '<hr>', text, flags = re.MULTILINE  )
+    text = re.sub(r'\$\\rightarrow\$', '→', text)
+    text = re.sub(r'\$\\leftarrow\$', '←', text)
     return f'<p>{text}</p>'
 
 
