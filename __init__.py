@@ -5,8 +5,9 @@ from typing import Any, Tuple
 
 import aqt.reviewer
 from aqt import gui_hooks, mw
+from aqt.utils import askUser, showInfo
 from anki.cards import Card
-from .configDialog import DEFAULT_PROMPT
+from .configDialog import DEFAULT_CONFIG, DEFAULT_PROMPT, SCHEMA_VERSION
 
 from .geminiApi import GeminiWorker
 
@@ -41,11 +42,9 @@ def answersMatch(expected: str, provided: str) -> bool:
     return normalizeText(expected) == normalizeText(provided)
 
 
-def resolveModelId(config: dict) -> str:
-    modelName: str = config.get('model', 'gemini-2.5-flash')
-    if modelName == 'custom':
-        return config.get('customModelId', '').strip() or 'gemini-2.5-flash'
-    return modelName
+def getModelIds(config: dict) -> list[str]:
+    models: list[str] = [m for m in config.get('models', []) if m]
+    return models if models else ['gemini-3.1-flash-lite-preview']
 
 
 def getPromptForCard(card: Card, config: dict) -> str:
@@ -77,14 +76,33 @@ def buildPrompt(card: Card, config: dict) -> str:
 
 
 def setButtonChecking() -> None:
-    mw.reviewer.web.eval("""
-        (function() {
+    buttonStyle = 'padding:6px 16px; cursor:pointer;'
+    safeButtonHtml = json.dumps(
+        f'<button id="typedAnswerCheckerByAI-button"'
+        f' onclick="pycmd(\'typedAnswerCheckerByAI-action-check\');"'
+        f' style="{buttonStyle}" disabled>Checking\u2026</button>'
+    )
+    mw.reviewer.web.eval(f"""
+        (function() {{
+            const container = document.getElementById('typedAnswerCheckerByAI-container');
+            if (container) {{
+                container.style.textAlign = 'center';
+                container.innerHTML = {safeButtonHtml};
+            }}
+        }})();
+    """)
+
+
+def setButtonRetrying(current: int, total: int) -> None:
+    label = json.dumps(f'Retrying\u2026 ({current}/{total})')
+    mw.reviewer.web.eval(f"""
+        (function() {{
             const btn = document.getElementById('typedAnswerCheckerByAI-button');
-            if (btn) {
+            if (btn) {{
                 btn.disabled = true;
-                btn.textContent = 'Checking…';
-            }
-        })();
+                btn.textContent = {label};
+            }}
+        }})();
     """)
 
 
@@ -150,40 +168,69 @@ def replaceContainerWithError(message: str) -> None:
 
 
 def onApiSuccess(text: str, worker: GeminiWorker) -> None:
-    _state.pop("worker", None)
+    _state.pop('worker', None)
     replaceContainerWithResult(text)
 
 
-def onApiError(message: str, worker: GeminiWorker) -> None:
-    _state.pop("worker", None)
-    replaceContainerWithError(message)
+def _onApiErrorWithFallback(
+    message: str,
+    worker: GeminiWorker,
+    modelIds: list[str],
+    index: int,
+    prompt: str,
+    apiKey: str,
+) -> None:
+    _state.pop('worker', None)
+    if index + 1 < len(modelIds):
+        triggerApiCallWithIndex(
+            modelIds = modelIds,
+            index = index + 1,
+            prompt = prompt,
+            apiKey = apiKey,
+        )
+    else:
+        replaceContainerWithError(message)
+
+
+def triggerApiCallWithIndex(
+    modelIds: list[str],
+    index: int,
+    prompt: str,
+    apiKey: str,
+) -> None:
+    if index == 0:
+        setButtonChecking()
+    else:
+        setButtonRetrying(current = index, total = len(modelIds))
+
+    worker = GeminiWorker(apiKey = apiKey, modelId = modelIds[index], prompt = prompt)
+    worker.success.connect(lambda text, w = worker: onApiSuccess(text, w))
+    worker.error.connect(
+        lambda msg, w = worker: _onApiErrorWithFallback(msg, w, modelIds, index, prompt, apiKey)
+    )
+    worker.finished.connect(worker.deleteLater)
+    _state['worker'] = worker
+    worker.start()
 
 
 def triggerApiCall() -> None:
     config = mw.addonManager.getConfig(__name__) or {}
-    apiKey: str = config.get("apiKey", "").strip()
+    apiKey: str = config.get('apiKey', '').strip()
     if not apiKey:
         replaceContainerWithError(
-            "No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config."
+            'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.'
         )
         return
 
-    card: Card = _state.get("card")
+    card: Card = _state.get('card')
     if not card:
-        replaceContainerWithError("Error: card reference lost.")
+        replaceContainerWithError('Error: card reference lost.')
         return
 
-    modelId = resolveModelId(config)
+    modelIds = getModelIds(config)
     prompt = buildPrompt(card, config)
 
-    setButtonChecking()
-
-    worker = GeminiWorker(apiKey = apiKey, modelId = modelId, prompt = prompt)
-    worker.success.connect(lambda text: onApiSuccess(text, worker))
-    worker.error.connect(lambda message: onApiError(message, worker))
-    worker.finished.connect(worker.deleteLater)
-    _state["worker"] = worker
-    worker.start()
+    triggerApiCallWithIndex(modelIds = modelIds, index = 0, prompt = prompt, apiKey = apiKey)
 
 
 def injectButton() -> None:
@@ -217,16 +264,16 @@ def onRenderComparedAnswer(
     typePattern: str,
 ) -> str:
     if answersMatch(initialExpected, initialProvided):
-        _state.pop("card", None)
+        _state.pop('card', None)
         return output
-    _state["card"] = mw.reviewer.card
-    _state["expected"] = initialExpected
-    _state["provided"] = initialProvided
+    _state['card'] = mw.reviewer.card
+    _state['expected'] = initialExpected
+    _state['provided'] = initialProvided
     return output
 
 
 def onDidShowAnswer(card: Card) -> None:
-    if _state.get("card"):
+    if _state.get('card'):
         injectButton()
 
 
@@ -247,10 +294,38 @@ def onJsMessage(
 ) -> Tuple[bool, Any]:
     if not isinstance(context, aqt.reviewer.Reviewer):
         return handled
-    if message == "typedAnswerCheckerByAI-action-check":
+    if message == 'typedAnswerCheckerByAI-action-check':
         triggerApiCall()
         return (True, None)
     return handled
+
+
+def _migrateConfigV1ToV2(config: dict) -> dict:
+    model: str = config.get('model', 'gemini-3.1-flash-lite-preview')
+    customModelId: str = config.get('customModelId', '')
+    resolvedModelId = (customModelId.strip() or 'gemini-3.1-flash-lite-preview') if model == 'custom' else model
+    return {
+        'schemaVersion': SCHEMA_VERSION,
+        'models': [resolvedModelId],
+        'apiKey': config.get('apiKey', ''),
+        'prompts': config.get('prompts', DEFAULT_CONFIG['prompts']),
+    }
+
+
+def migrateConfigIfNeeded() -> None:
+    config = mw.addonManager.getConfig(__name__)
+    if not config:
+        return
+    isV1 = 'model' in config or 'customModelId' in config
+    if not isV1 and config.get('schemaVersion') == SCHEMA_VERSION:
+        return
+    try:
+        newConfig = _migrateConfigV1ToV2(config)
+        mw.addonManager.writeConfig(__name__, newConfig)
+        showInfo('Typed Answer Checker by AI: Configuration Updated')
+    except Exception as e:
+        if askUser(f'Config upgrade failed ({e}). Reset to default?'):
+            mw.addonManager.writeConfig(__name__, DEFAULT_CONFIG)
 
 
 def showConfig() -> None:
@@ -263,4 +338,5 @@ gui_hooks.reviewer_will_render_compared_answer.append(onRenderComparedAnswer)
 gui_hooks.reviewer_did_show_answer.append(onDidShowAnswer)
 gui_hooks.reviewer_did_show_question.append(onDidShowQuestion)
 gui_hooks.webview_did_receive_js_message.append(onJsMessage)
+gui_hooks.main_window_did_init.append(migrateConfigIfNeeded)
 mw.addonManager.setConfigAction(__name__, showConfig)

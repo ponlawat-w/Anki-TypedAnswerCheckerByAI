@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Optional
 
 from aqt import mw
@@ -12,6 +14,7 @@ from aqt.qt import (
     QLineEdit,
     QPushButton,
     QTextEdit,
+    QTimer,
     QVBoxLayout,
     QWidget,
 )
@@ -19,9 +22,23 @@ from .prompt import DEFAULT_PROMPT
 
 ADDON_MODULE: str = __name__.split('.')[0]
 
+_defaultConfig: dict = json.load(
+    open(os.path.join(os.path.dirname(__file__), 'config.json'))
+)
+
+SCHEMA_VERSION: int = _defaultConfig['schemaVersion']
+
+PRESET_MODELS: list[str] = [
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3-flash-preview',
+    'gemini-3.1-pro-preview',
+]
+
 DEFAULT_CONFIG: dict = {
-    'model': 'gemini-3.1-flash-lite-preview',
-    'customModelId': '',
+    'schemaVersion': SCHEMA_VERSION,
+    'models': ['gemini-3.1-flash-lite-preview'],
     'apiKey': '',
     'prompts': {
         'default': DEFAULT_PROMPT,
@@ -30,20 +47,12 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-MODELS: list[str] = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3-flash-preview',
-    'gemini-3.1-pro-preview',
-    'custom',
-]
-
-MODEL_KEY_TO_INDEX: dict[str, int] = {key: index for index, key in enumerate(MODELS)}
-
 DEFAULT_PROMPT_SETTINGS_KEY: str = '__default__'
 DECK_KEY_PREFIX: str = 'deck::'
 CARD_TYPE_KEY_PREFIX: str = 'cardType::'
+
+CUSTOM_MODEL_PLACEHOLDER: str = 'Enter model ID from Google AI Studio, e.g. gemini-3.1-flash-lite-preview'
+CUSTOM_MODEL_DEFAULT_TEXT: str = 'custom-model-name'
 
 
 def hasTypedAnswer(template: dict) -> bool:
@@ -86,6 +95,8 @@ class ConfigDialog(QDialog):
         self._config: dict = mw.addonManager.getConfig(ADDON_MODULE) or {}
         self._tempPrompts: dict[str, str] = {}
         self._previousPromptSettingsIndex: int = 0
+        self._modelRows: list[tuple[QComboBox, Optional[QLineEdit], QWidget, QLabel]] = []
+        self._isLoading: bool = False
         self._buildUi()
         self._loadValues()
         self._connectSignals()
@@ -100,29 +111,165 @@ class ConfigDialog(QDialog):
     def _buildModelSection(self) -> QGroupBox:
         box = QGroupBox('AI Model Configuration')
         layout = QVBoxLayout(box)
-        layout.addLayout(self._buildModelRow())
-        self._customModelWidget = self._buildCustomModelWidget()
-        layout.addWidget(self._customModelWidget)
+
+        self._modelErrorLabel = QLabel('At least one model must be selected.')
+        self._modelErrorLabel.setStyleSheet('color: red;')
+        self._modelErrorLabel.setVisible(False)
+        layout.addWidget(self._modelErrorLabel)
+
+        self._modelListContainer = QWidget()
+        self._modelListLayout = QVBoxLayout(self._modelListContainer)
+        self._modelListLayout.setContentsMargins(0, 0, 0, 0)
+        self._modelListLayout.setSpacing(2)
+        layout.addWidget(self._modelListContainer)
+
         layout.addLayout(self._buildApiKeyRow())
         return box
 
-    def _buildModelRow(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        self._modelCombo = QComboBox()
-        self._modelCombo.addItems(['Custom' if model == 'custom' else model for model in MODELS])
-        row.addWidget(QLabel('Model:'))
-        row.addWidget(self._modelCombo)
-        return row
+    def _buildModelComboOptions(self) -> list[str]:
+        return ['None'] + PRESET_MODELS + ['Custom']
 
-    def _buildCustomModelWidget(self) -> QWidget:
-        widget = QWidget()
-        row = QHBoxLayout(widget)
-        row.setContentsMargins(0, 0, 0, 0)
-        self._customModelEdit = QLineEdit()
-        self._customModelEdit.setPlaceholderText('e.g. gemini-2.5-flash')
-        row.addWidget(QLabel('Custom model ID:'))
-        row.addWidget(self._customModelEdit)
-        return widget
+    def _updateModelRowLabels(self) -> None:
+        for i, (_, _, _, label) in enumerate(self._modelRows):
+            label.setText('Main Model' if i == 0 else f'Fallback Model #{i}')
+
+    def _createModelRow(self, modelId: str) -> None:
+        rowWidget = QWidget()
+        rowLayout = QVBoxLayout(rowWidget)
+        rowLayout.setContentsMargins(0, 0, 0, 0)
+        rowLayout.setSpacing(2)
+
+        rowLabel = QLabel()
+        rowLayout.addWidget(rowLabel)
+
+        combo = QComboBox()
+        combo.addItems(self._buildModelComboOptions())
+
+        lineEdit: Optional[QLineEdit] = None
+
+        if modelId == '':
+            combo.setCurrentIndex(0)
+        elif modelId in PRESET_MODELS:
+            combo.setCurrentIndex(PRESET_MODELS.index(modelId) + 1)
+        else:
+            combo.setCurrentIndex(len(PRESET_MODELS) + 1)
+            lineEdit = self._buildCustomLineEdit(combo)
+            lineEdit.setText(modelId)
+
+        comboRow = QHBoxLayout()
+        comboRow.addWidget(combo)
+        rowLayout.addLayout(comboRow)
+
+        if lineEdit is not None:
+            paddedRow = QHBoxLayout()
+            paddedRow.addSpacing(20)
+            paddedRow.addWidget(lineEdit)
+            rowLayout.addLayout(paddedRow)
+
+        self._modelRows.append((combo, lineEdit, rowWidget, rowLabel))
+        self._modelListLayout.addWidget(rowWidget)
+        self._updateModelRowLabels()
+
+        combo.currentIndexChanged.connect(
+            lambda idx, c = combo: self._onRowModelChanged(c, idx)
+        )
+
+    def _buildCustomLineEdit(self, combo: QComboBox) -> QLineEdit:
+        lineEdit = QLineEdit()
+        lineEdit.setPlaceholderText(CUSTOM_MODEL_PLACEHOLDER)
+        lineEdit.setText(CUSTOM_MODEL_DEFAULT_TEXT)
+        lineEdit.editingFinished.connect(
+            lambda le = lineEdit, c = combo: self._onCustomModelEditFinished(le, c)
+        )
+        return lineEdit
+
+    def _appendEmptyModelRow(self) -> None:
+        self._createModelRow('')
+
+    def _findRowIndex(self, combo: QComboBox) -> int:
+        for i, (c, _, _, _) in enumerate(self._modelRows):
+            if c is combo:
+                return i
+        return -1
+
+    def _removeModelRow(self, combo: QComboBox) -> None:
+        index = self._findRowIndex(combo)
+        if index < 0:
+            return
+        _, _, rowWidget, _ = self._modelRows[index]
+        self._modelListLayout.removeWidget(rowWidget)
+        rowWidget.setParent(None)
+        self._modelRows.pop(index)
+        self._updateModelRowLabels()
+
+    def _updateCustomLineEditVisibility(self, combo: QComboBox, visible: bool) -> None:
+        index = self._findRowIndex(combo)
+        if index < 0:
+            return
+        c, lineEdit, rowWidget, rowLabel = self._modelRows[index]
+        rowLayout = rowWidget.layout()
+
+        if visible and lineEdit is None:
+            lineEdit = self._buildCustomLineEdit(combo)
+            paddedRow = QHBoxLayout()
+            paddedRow.addSpacing(20)
+            paddedRow.addWidget(lineEdit)
+            rowLayout.addLayout(paddedRow)
+            self._modelRows[index] = (c, lineEdit, rowWidget, rowLabel)
+        elif not visible and lineEdit is not None:
+            lineEdit.setVisible(False)
+        elif visible and lineEdit is not None:
+            lineEdit.setVisible(True)
+
+    def _onRowModelChanged(self, combo: QComboBox, comboIndex: int) -> None:
+        if self._isLoading:
+            return
+
+        isCustom = comboIndex == len(PRESET_MODELS) + 1
+        isNone = comboIndex == 0
+        isLast = self._findRowIndex(combo) == len(self._modelRows) - 1
+
+        self._updateCustomLineEditVisibility(combo, isCustom)
+
+        if isNone and not isLast:
+            QTimer.singleShot(0, lambda c=combo: self._removeModelRow(c))
+        elif not isNone and isLast:
+            self._appendEmptyModelRow()
+
+        self._updateModelErrorLabel()
+
+    def _onCustomModelEditFinished(self, lineEdit: QLineEdit, combo: QComboBox) -> None:
+        text = lineEdit.text().strip()
+        if text in PRESET_MODELS:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(PRESET_MODELS.index(text) + 1)
+            combo.blockSignals(False)
+            lineEdit.setVisible(False)
+            index = self._findRowIndex(combo)
+            if index >= 0:
+                c, _, rowWidget, rowLabel = self._modelRows[index]
+                self._modelRows[index] = (c, None, rowWidget, rowLabel)
+
+        isLast = self._findRowIndex(combo) == len(self._modelRows) - 1
+        if isLast and text:
+            self._appendEmptyModelRow()
+
+        self._updateModelErrorLabel()
+
+    def _updateModelErrorLabel(self) -> None:
+        showError = (
+            len(self._modelRows) == 1
+            and self._modelRows[0][0].currentIndex() == 0
+        )
+        self._modelErrorLabel.setVisible(showError)
+
+    def _getRowModelId(self, combo: QComboBox, lineEdit: Optional[QLineEdit]) -> str:
+        comboIndex = combo.currentIndex()
+        if comboIndex == 0:
+            return ''
+        if comboIndex == len(PRESET_MODELS) + 1:
+            return lineEdit.text().strip() if lineEdit else ''
+        return PRESET_MODELS[comboIndex - 1]
 
     def _buildApiKeyRow(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -175,12 +322,8 @@ class ConfigDialog(QDialog):
         return buttons
 
     def _connectSignals(self) -> None:
-        self._modelCombo.currentIndexChanged.connect(self._onModelChanged)
         self._promptSettingsCombo.currentIndexChanged.connect(self._onPromptSettingsChanged)
         self._customPromptCheck.stateChanged.connect(self._onCustomPromptCheckChanged)
-
-    def _onModelChanged(self, index: int) -> None:
-        self._customModelWidget.setVisible(self._modelCombo.currentText() == 'Custom')
 
     def _onPromptSettingsChanged(self, index: int) -> None:
         self._persistPromptForIndex(self._previousPromptSettingsIndex)
@@ -270,7 +413,14 @@ class ConfigDialog(QDialog):
         else:
             self._tempPrompts.pop(key, None)
 
+    def _clearModelRows(self) -> None:
+        for _, _, rowWidget, _ in self._modelRows:
+            self._modelListLayout.removeWidget(rowWidget)
+            rowWidget.setParent(None)
+        self._modelRows.clear()
+
     def _loadValues(self) -> None:
+        self._isLoading = True
         self._tempPrompts = {}
         self._previousPromptSettingsIndex = 0
         prompts: dict = self._config.get('prompts', {})
@@ -282,10 +432,16 @@ class ConfigDialog(QDialog):
             if value:
                 self._tempPrompts[f'{CARD_TYPE_KEY_PREFIX}{cardTypeKey}'] = value
 
-        self._modelCombo.setCurrentIndex(MODEL_KEY_TO_INDEX.get(self._config.get('model', 'gemini-3.1-flash-lite-preview'), 0))
-        self._customModelEdit.setText(self._config.get('customModelId', ''))
+        self._clearModelRows()
+        models: list[str] = self._config.get('models', ['gemini-3.1-flash-lite-preview'])
+        for modelId in models:
+            self._createModelRow(modelId)
+        self._appendEmptyModelRow()
+        self._updateModelErrorLabel()
+
         self._apiKeyEdit.setText(self._config.get('apiKey', ''))
-        self._onModelChanged(self._modelCombo.currentIndex())
+
+        self._isLoading = False
 
         self._updatePromptSettingsLabels()
         self._promptSettingsCombo.setCurrentIndex(0)
@@ -293,6 +449,17 @@ class ConfigDialog(QDialog):
 
     def _saveAndClose(self) -> None:
         self._persistPromptForIndex(self._promptSettingsCombo.currentIndex())
+
+        resolvedModels: list[str] = []
+        for (combo, lineEdit, _, _) in self._modelRows:
+            modelId = self._getRowModelId(combo, lineEdit)
+            if modelId:
+                resolvedModels.append(modelId)
+
+        if not resolvedModels:
+            self._modelErrorLabel.setVisible(True)
+            return
+
         deckPrompts: dict[str, str] = {}
         cardTypePrompts: dict[str, str] = {}
         for (key, value) in self._tempPrompts.items():
@@ -302,9 +469,10 @@ class ConfigDialog(QDialog):
                 deckPrompts[key[len(DECK_KEY_PREFIX):]] = value
             elif key.startswith(CARD_TYPE_KEY_PREFIX):
                 cardTypePrompts[key[len(CARD_TYPE_KEY_PREFIX):]] = value
+
         newConfig = {
-            'model': MODELS[self._modelCombo.currentIndex()],
-            'customModelId': self._customModelEdit.text().strip(),
+            'schemaVersion': SCHEMA_VERSION,
+            'models': resolvedModels,
             'apiKey': self._apiKeyEdit.text().strip(),
             'prompts': {
                 'default': self._tempPrompts.get(DEFAULT_PROMPT_SETTINGS_KEY, DEFAULT_PROMPT),
