@@ -88,6 +88,6 @@ Any model ID supported by the Gemini API can be entered as a custom value. Built
 
 - `gemini-2.5-flash`
 - `gemini-2.5-pro`
-- `gemini-3.1-flash-lite-preview` (default)
+- `gemini-3.1-flash-lite` (default)
 - `gemini-3-flash-preview`
 - `gemini-3.1-pro-preview`

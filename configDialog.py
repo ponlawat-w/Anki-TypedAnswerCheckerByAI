@@ -31,14 +31,14 @@ SCHEMA_VERSION: int = _defaultConfig['schemaVersion']
 PRESET_MODELS: list[str] = [
     'gemini-2.5-flash',
     'gemini-2.5-pro',
-    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-flash-lite',
     'gemini-3-flash-preview',
     'gemini-3.1-pro-preview',
 ]
 
 DEFAULT_CONFIG: dict = {
     'schemaVersion': SCHEMA_VERSION,
-    'models': ['gemini-3.1-flash-lite-preview'],
+    'models': ['gemini-3.1-flash-lite'],
     'apiKey': '',
     'prompts': {
         'default': DEFAULT_PROMPT,
@@ -51,7 +51,7 @@ DEFAULT_PROMPT_SETTINGS_KEY: str = '__default__'
 DECK_KEY_PREFIX: str = 'deck::'
 CARD_TYPE_KEY_PREFIX: str = 'cardType::'
 
-CUSTOM_MODEL_PLACEHOLDER: str = 'Enter model ID from Google AI Studio, e.g. gemini-3.1-flash-lite-preview'
+CUSTOM_MODEL_PLACEHOLDER: str = 'Enter model ID from Google AI Studio, e.g. gemini-3.1-flash-lite'
 CUSTOM_MODEL_DEFAULT_TEXT: str = 'custom-model-name'
 
 
@@ -433,7 +433,7 @@ class ConfigDialog(QDialog):
                 self._tempPrompts[f'{CARD_TYPE_KEY_PREFIX}{cardTypeKey}'] = value
 
         self._clearModelRows()
-        models: list[str] = self._config.get('models', ['gemini-3.1-flash-lite-preview'])
+        models: list[str] = self._config.get('models', ['gemini-3.1-flash-lite'])
         for modelId in models:
             self._createModelRow(modelId)
         self._appendEmptyModelRow()

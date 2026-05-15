@@ -44,7 +44,7 @@ def answersMatch(expected: str, provided: str) -> bool:
 
 def getModelIds(config: dict) -> list[str]:
     models: list[str] = [m for m in config.get('models', []) if m]
-    return models if models else ['gemini-3.1-flash-lite-preview']
+    return models if models else ['gemini-3.1-flash-lite']
 
 
 def getPromptForCard(card: Card, config: dict) -> str:
@@ -301,9 +301,9 @@ def onJsMessage(
 
 
 def _migrateConfigV1ToV2(config: dict) -> dict:
-    model: str = config.get('model', 'gemini-3.1-flash-lite-preview')
+    model: str = config.get('model', 'gemini-3.1-flash-lite')
     customModelId: str = config.get('customModelId', '')
-    resolvedModelId = (customModelId.strip() or 'gemini-3.1-flash-lite-preview') if model == 'custom' else model
+    resolvedModelId = (customModelId.strip() or 'gemini-3.1-flash-lite') if model == 'custom' else model
     return {
         'schemaVersion': SCHEMA_VERSION,
         'models': [resolvedModelId],
