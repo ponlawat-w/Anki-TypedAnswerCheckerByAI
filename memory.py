@@ -165,18 +165,67 @@ def _cardAddedDate(card: Card) -> str:
         return 'unknown'
 
 
+def _revlogRows(card: Card) -> list[tuple[int, int]]:
+    try:
+        return mw.col.db.all('select id, ease from revlog where cid = ?', card.id)
+    except Exception:
+        return []
+
+
 def _easeCounts(card: Card) -> dict[int, int]:
     counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
-    try:
-        rows = mw.col.db.all(
-            'select ease, count() from revlog where cid = ? group by ease', card.id
-        )
-        for ease, count in rows:
-            if ease in counts:
-                counts[ease] = count
-    except Exception:
-        pass
+    for _, ease in _revlogRows(card):
+        if ease in counts:
+            counts[ease] += 1
     return counts
+
+
+def _formatDaysAgo(reviewIdMs: int) -> str:
+    days = int((datetime.now().timestamp() * 1000 - reviewIdMs) / 86400000)
+    if days <= 0:
+        return 'today'
+    if days == 1:
+        return 'yesterday'
+    return f'{days} days ago'
+
+
+def _mostRecentByEase(rows: list[tuple[int, int]]) -> dict[int, str]:
+    latest: dict[int, int] = {}
+    for reviewIdMs, ease in rows:
+        if ease in (1, 2, 3, 4) and reviewIdMs > latest.get(ease, 0):
+            latest[ease] = reviewIdMs
+    return {ease: _formatDaysAgo(latest[ease]) if ease in latest else 'never' for ease in (1, 2, 3, 4)}
+
+
+CARD_STATS_TEMPLATE: str = (
+    'Card added: {cardAddedDate}\n'
+    'Answer counts: again {againCount} / hard {hardCount} /'
+    ' good {goodCount} / easy {easyCount}\n'
+    'Most recent "again": {againRecent}\n'
+    'Most recent "hard": {hardRecent}\n'
+    'Most recent "good": {goodRecent}\n'
+    'Most recent "easy": {easyRecent}'
+)
+
+
+def buildCardStatsBlock(card: Card) -> str:
+    rows = _revlogRows(card)
+    counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
+    for _, ease in rows:
+        if ease in counts:
+            counts[ease] += 1
+    recent = _mostRecentByEase(rows)
+    return CARD_STATS_TEMPLATE.format(
+        cardAddedDate = _cardAddedDate(card),
+        againCount = counts[1],
+        hardCount = counts[2],
+        goodCount = counts[3],
+        easyCount = counts[4],
+        againRecent = recent[1],
+        hardRecent = recent[2],
+        goodRecent = recent[3],
+        easyRecent = recent[4],
+    )
 
 
 def buildMemoryUpdatePrompt(

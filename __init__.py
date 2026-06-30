@@ -13,6 +13,7 @@ from .geminiApi import GeminiWorker
 from .memory import (
     MAX_MEMORY_POINTS,
     MEMORY_GENERATION_CONFIG,
+    buildCardStatsBlock,
     buildMemoryUpdatePrompt,
     getDeckMemory,
     getDeckName,
@@ -20,13 +21,17 @@ from .memory import (
     saveDeckMemory,
 )
 
-MEMORY_BLOCK_TEMPLATE: str = (
+CONTEXT_BLOCK_TEMPLATE: str = (
     "\n\n---\n"
-    "The following are notes about this learner's recurring mistakes and weak points, written"
-    " in English for your reference only. Use them to personalise your evaluation and gently"
-    " emphasise the learner's known weak points where relevant. Do NOT mention or quote these"
-    " notes, and write your whole response in the same language as the rest of this prompt.\n"
-    "Notes:\n{points}"
+    "The following context about this learner is provided in English for your reference only."
+    " Use it to personalise your evaluation and gently emphasise the learner's weak points"
+    " where relevant. Do NOT mention or quote it, and write your whole response in the same"
+    " language as the rest of this prompt.\n\n"
+    "This card's review history:\n{cardStats}{memorySection}"
+)
+
+MEMORY_SECTION_TEMPLATE: str = (
+    "\n\nRecurring weak points across this deck:\n{points}"
 )
 
 BUTTON_HTML: str = """
@@ -81,11 +86,16 @@ def getPromptForCard(card: Card, config: dict) -> str:
     return prompts.get('default', DEFAULT_PROMPT)
 
 
-def buildMemoryBlock(card: Card) -> str:
+def buildContextBlock(card: Card) -> str:
     points = getDeckMemory(getDeckName(card))
-    if not points:
-        return ''
-    return MEMORY_BLOCK_TEMPLATE.format(points = '\n'.join(f'- {point}' for point in points))
+    memorySection = (
+        MEMORY_SECTION_TEMPLATE.format(points = '\n'.join(f'- {point}' for point in points))
+        if points else ''
+    )
+    return CONTEXT_BLOCK_TEMPLATE.format(
+        cardStats = buildCardStatsBlock(card),
+        memorySection = memorySection,
+    )
 
 
 def buildPrompt(card: Card, config: dict) -> str:
@@ -99,7 +109,7 @@ def buildPrompt(card: Card, config: dict) -> str:
         .replace('{{cardAnswer}}', cardAnswer)
         .replace('{{userAnswer}}', userAnswer)
     )
-    return prompt + buildMemoryBlock(card)
+    return prompt + buildContextBlock(card)
 
 
 def setButtonChecking() -> None:
