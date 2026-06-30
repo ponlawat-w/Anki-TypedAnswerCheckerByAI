@@ -23,11 +23,11 @@ from .memory import (
 
 CONTEXT_BLOCK_TEMPLATE: str = (
     "\n\n---\n"
-    "The following context about this learner is provided in English for your reference only."
-    " Use it to personalise your evaluation and gently emphasise the learner's weak points"
-    " where relevant. Do NOT mention or quote it, and write your whole response in the same"
-    " language as the rest of this prompt.\n\n"
-    "This card's review history:\n{cardStats}{memorySection}"
+    "The following context about this learner — who is studying with the Anki spaced-repetition"
+    " flashcard app — is provided in English for your reference only. Use it to personalise your"
+    " evaluation and gently emphasise the learner's weak points where relevant. Do NOT mention or"
+    " quote it, and write your whole response in the same language as the rest of this prompt.\n\n"
+    "This card's Anki review history:\n{cardStats}{memorySection}"
 )
 
 MEMORY_SECTION_TEMPLATE: str = (

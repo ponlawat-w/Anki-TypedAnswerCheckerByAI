@@ -24,9 +24,7 @@ MEMORY_UPDATE_PROMPT: str = (
     "Learner's answer: {userAnswer}\n"
     "Latest AI feedback: {aiResponse}\n"
     "Learner's self-rating: {easeLabel}\n"
-    "Card added: {cardAddedDate}\n"
-    "Review history (counts): again {againCount} / hard {hardCount} /"
-    " good {goodCount} / easy {easyCount}\n"
+    "{cardStats}\n"
     "Current memory:\n{currentMemory}\n\n"
     "Update the memory so it captures general, recurring patterns useful across many cards."
     " Keep it concise: at most {maxPoints} short bullet points, each a single sentence written"
@@ -172,9 +170,19 @@ def _revlogRows(card: Card) -> list[tuple[int, int]]:
         return []
 
 
-def _easeCounts(card: Card) -> dict[int, int]:
+def _noteRevlogRows(card: Card) -> list[tuple[int, int]]:
+    try:
+        return mw.col.db.all(
+            'select id, ease from revlog where cid in (select id from cards where nid = ?)',
+            card.nid,
+        )
+    except Exception:
+        return []
+
+
+def _countsFromRows(rows: list[tuple[int, int]]) -> dict[int, int]:
     counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
-    for _, ease in _revlogRows(card):
+    for _, ease in rows:
         if ease in counts:
             counts[ease] += 1
     return counts
@@ -197,26 +205,20 @@ def _mostRecentByEase(rows: list[tuple[int, int]]) -> dict[int, str]:
     return {ease: _formatDaysAgo(latest[ease]) if ease in latest else 'never' for ease in (1, 2, 3, 4)}
 
 
-CARD_STATS_TEMPLATE: str = (
-    'Card added: {cardAddedDate}\n'
-    'Answer counts: again {againCount} / hard {hardCount} /'
-    ' good {goodCount} / easy {easyCount}\n'
-    'Most recent "again": {againRecent}\n'
-    'Most recent "hard": {hardRecent}\n'
-    'Most recent "good": {goodRecent}\n'
-    'Most recent "easy": {easyRecent}'
+STATS_LINES_TEMPLATE: str = (
+    '{label} — how often the learner self-graded their recall (again = forgot,'
+    ' hard, good, easy = effortless): again {againCount}, hard {hardCount},'
+    ' good {goodCount}, easy {easyCount}.\n'
+    '{label} — how long ago each grade was last given: again {againRecent},'
+    ' hard {hardRecent}, good {goodRecent}, easy {easyRecent}.'
 )
 
 
-def buildCardStatsBlock(card: Card) -> str:
-    rows = _revlogRows(card)
-    counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
-    for _, ease in rows:
-        if ease in counts:
-            counts[ease] += 1
+def _statsLines(label: str, rows: list[tuple[int, int]]) -> str:
+    counts = _countsFromRows(rows)
     recent = _mostRecentByEase(rows)
-    return CARD_STATS_TEMPLATE.format(
-        cardAddedDate = _cardAddedDate(card),
+    return STATS_LINES_TEMPLATE.format(
+        label = label,
         againCount = counts[1],
         hardCount = counts[2],
         goodCount = counts[3],
@@ -225,6 +227,15 @@ def buildCardStatsBlock(card: Card) -> str:
         hardRecent = recent[2],
         goodRecent = recent[3],
         easyRecent = recent[4],
+    )
+
+
+def buildCardStatsBlock(card: Card) -> str:
+    return (
+        f'Card added: {_cardAddedDate(card)}\n'
+        + _statsLines('This card', _revlogRows(card))
+        + '\n\n'
+        + _statsLines('This note (all its card types combined)', _noteRevlogRows(card))
     )
 
 
@@ -237,7 +248,6 @@ def buildMemoryUpdatePrompt(
     ease: int,
     maxPoints: int = MAX_MEMORY_POINTS,
 ) -> str:
-    counts = _easeCounts(card)
     currentMemory = getDeckMemory(getDeckName(card))
     currentMemoryText = (
         '\n'.join(f'- {point}' for point in currentMemory) if currentMemory else '(empty)'
@@ -248,11 +258,7 @@ def buildMemoryUpdatePrompt(
         userAnswer = userAnswer,
         aiResponse = aiResponse,
         easeLabel = EASE_LABELS.get(ease, 'unknown'),
-        cardAddedDate = _cardAddedDate(card),
-        againCount = counts[1],
-        hardCount = counts[2],
-        goodCount = counts[3],
-        easyCount = counts[4],
+        cardStats = buildCardStatsBlock(card),
         currentMemory = currentMemoryText,
         maxPoints = maxPoints,
     )
