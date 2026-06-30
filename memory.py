@@ -7,7 +7,7 @@ from typing import Optional
 from anki.cards import Card
 from aqt import mw
 
-MAX_MEMORY_POINTS: int = 10
+MAX_MEMORY_POINTS: int = 20
 MAX_POINT_LENGTH: int = 300
 
 EASE_LABELS: dict[int, str] = {1: 'again', 2: 'hard', 3: 'good', 4: 'easy'}
