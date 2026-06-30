@@ -10,6 +10,12 @@ If the first model in your list fails, the add-on automatically retries with the
 
 The AI response is rendered inline on the card — no separate window.
 
+### Learning memory
+
+The add-on keeps a per-deck **learning memory** — a short list of your recurring mistakes and weak points. Whenever you run an AI check on a card and then rate it (Again/Hard/Good/Easy), a background request asks Gemini to update that deck's memory based on the question, your answer, the AI's feedback, your rating, and your review history. The update runs silently and never interrupts your review.
+
+On every subsequent AI check, the deck's memory is appended to the prompt so the AI can personalise its feedback and emphasise your known weak points. The memory notes are kept in English internally but the AI is instructed to keep responding in the language of your prompt. Memory is stored in `user_files/memory.json` and is independent of your other settings (resetting settings does not clear it). You can wipe it from the config dialog with **Clear learning memory (all decks)**.
+
 ## Features
 
 - Automatically detects typed-answer mismatches and injects the check button
@@ -18,6 +24,7 @@ The AI response is rendered inline on the card — no separate window.
 - Renders the AI response as formatted HTML (supports bold, italic, lists, code blocks, headers)
 - Shows a **Retry** button on API errors
 - Per-deck and per-card-type prompt overrides — different decks or note type/card combinations can use different prompts
+- Per-deck learning memory that records recurring weak points and personalises future checks
 - Config dialog accessible from **Tools > Add-ons**
 
 ## Requirements

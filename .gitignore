@@ -178,3 +178,4 @@ pyrightconfig.json
 meta*.json
 CLAUDE.md
 .claude/
+user_files/

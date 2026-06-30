@@ -3,6 +3,7 @@ import os
 from typing import Optional
 
 from aqt import mw
+from aqt.utils import askUser, showInfo
 from aqt.qt import (
     QCheckBox,
     QComboBox,
@@ -19,6 +20,7 @@ from aqt.qt import (
     QWidget,
 )
 from .prompt import DEFAULT_PROMPT
+from .memory import clearAllMemory
 
 ADDON_MODULE: str = __name__.split('.')[0]
 
@@ -311,7 +313,15 @@ class ConfigDialog(QDialog):
         resetButton = QPushButton('Reset to default settings')
         resetButton.clicked.connect(self._resetToDefaults)
         layout.addWidget(resetButton)
+        clearMemoryButton = QPushButton('Clear learning memory (all decks)')
+        clearMemoryButton.clicked.connect(self._clearMemory)
+        layout.addWidget(clearMemoryButton)
         return box
+
+    def _clearMemory(self) -> None:
+        if askUser('Clear the AI learning memory for all decks? This cannot be undone.'):
+            clearAllMemory()
+            showInfo('Learning memory cleared.')
 
     def _buildButtonBox(self) -> QDialogButtonBox:
         buttons = QDialogButtonBox(

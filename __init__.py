@@ -10,6 +10,24 @@ from anki.cards import Card
 from .configDialog import DEFAULT_CONFIG, DEFAULT_PROMPT, SCHEMA_VERSION
 
 from .geminiApi import GeminiWorker
+from .memory import (
+    MAX_MEMORY_POINTS,
+    MEMORY_GENERATION_CONFIG,
+    buildMemoryUpdatePrompt,
+    getDeckMemory,
+    getDeckName,
+    parseMemoryResponse,
+    saveDeckMemory,
+)
+
+MEMORY_BLOCK_TEMPLATE: str = (
+    "\n\n---\n"
+    "The following are notes about this learner's recurring mistakes and weak points, written"
+    " in English for your reference only. Use them to personalise your evaluation and gently"
+    " emphasise the learner's known weak points where relevant. Do NOT mention or quote these"
+    " notes, and write your whole response in the same language as the rest of this prompt.\n"
+    "Notes:\n{points}"
+)
 
 BUTTON_HTML: str = """
 <div id="typedAnswerCheckerByAI-container" style="margin-top:12px; text-align:center;">
@@ -22,6 +40,7 @@ BUTTON_HTML: str = """
 """
 
 _state: dict = {}
+_memoryWorkers: list = []
 
 
 def stripHtml(html: str) -> str:
@@ -62,17 +81,25 @@ def getPromptForCard(card: Card, config: dict) -> str:
     return prompts.get('default', DEFAULT_PROMPT)
 
 
+def buildMemoryBlock(card: Card) -> str:
+    points = getDeckMemory(getDeckName(card))
+    if not points:
+        return ''
+    return MEMORY_BLOCK_TEMPLATE.format(points = '\n'.join(f'- {point}' for point in points))
+
+
 def buildPrompt(card: Card, config: dict) -> str:
     promptTemplate = getPromptForCard(card, config)
     cardQuestion = stripHtml(card.question())
     cardAnswer = normalizeText(_state.get('expected', ''))
     userAnswer: str = _state.get('provided', '')
-    return (
+    prompt = (
         promptTemplate
         .replace('{{cardQuestion}}', cardQuestion)
         .replace('{{cardAnswer}}', cardAnswer)
         .replace('{{userAnswer}}', userAnswer)
     )
+    return prompt + buildMemoryBlock(card)
 
 
 def setButtonChecking() -> None:
@@ -169,6 +196,7 @@ def replaceContainerWithError(message: str) -> None:
 
 def onApiSuccess(text: str, worker: GeminiWorker) -> None:
     _state.pop('worker', None)
+    _state['lastAiResponse'] = text
     replaceContainerWithResult(text)
 
 
@@ -272,6 +300,52 @@ def onRenderComparedAnswer(
     return output
 
 
+def _onMemoryUpdateSuccess(text: str, worker: GeminiWorker, deckName: str) -> None:
+    points = parseMemoryResponse(text, MAX_MEMORY_POINTS)
+    if points is not None:
+        saveDeckMemory(deckName, points)
+
+
+def _discardMemoryWorker(worker: GeminiWorker) -> None:
+    if worker in _memoryWorkers:
+        _memoryWorkers.remove(worker)
+    worker.deleteLater()
+
+
+def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
+    if not _state.get('card') or not _state.get('lastAiResponse'):
+        return
+
+    config = mw.addonManager.getConfig(__name__) or {}
+    apiKey: str = config.get('apiKey', '').strip()
+    if not apiKey:
+        return
+    modelIds = getModelIds(config)
+
+    deckName = getDeckName(card)
+    prompt = buildMemoryUpdatePrompt(
+        card = card,
+        question = stripHtml(card.question()),
+        expectedAnswer = normalizeText(_state.get('expected', '')),
+        userAnswer = _state.get('provided', ''),
+        aiResponse = _state.get('lastAiResponse', ''),
+        ease = ease,
+    )
+
+    worker = GeminiWorker(
+        apiKey = apiKey,
+        modelId = modelIds[0],
+        prompt = prompt,
+        generationConfig = MEMORY_GENERATION_CONFIG,
+    )
+    worker.success.connect(
+        lambda text, w = worker, d = deckName: _onMemoryUpdateSuccess(text, w, d)
+    )
+    worker.finished.connect(lambda w = worker: _discardMemoryWorker(w))
+    _memoryWorkers.append(worker)
+    worker.start()
+
+
 def onDidShowAnswer(card: Card) -> None:
     if _state.get('card'):
         injectButton()
@@ -335,6 +409,7 @@ def showConfig() -> None:
 
 
 gui_hooks.reviewer_will_render_compared_answer.append(onRenderComparedAnswer)
+gui_hooks.reviewer_did_answer_card.append(onReviewerDidAnswerCard)
 gui_hooks.reviewer_did_show_answer.append(onDidShowAnswer)
 gui_hooks.reviewer_did_show_question.append(onDidShowQuestion)
 gui_hooks.webview_did_receive_js_message.append(onJsMessage)

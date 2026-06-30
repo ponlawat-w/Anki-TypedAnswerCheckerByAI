@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+from typing import Optional
 
 from aqt.qt import QThread, pyqtSignal
 
@@ -11,10 +12,11 @@ def buildRequestUrl(modelId: str, apiKey: str) -> str:
     return GEMINI_API_URL.format(modelId = modelId, apiKey = apiKey)
 
 
-def buildRequestPayload(prompt: str) -> bytes:
-    return json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}]
-    }).encode("utf-8")
+def buildRequestPayload(prompt: str, generationConfig: Optional[dict] = None) -> bytes:
+    payload: dict = {"contents": [{"parts": [{"text": prompt}]}]}
+    if generationConfig:
+        payload["generationConfig"] = generationConfig
+    return json.dumps(payload).encode("utf-8")
 
 
 def extractResponseText(data: dict) -> str:
@@ -32,15 +34,23 @@ class GeminiWorker(QThread):
     success = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, apiKey: str, modelId: str, prompt: str, parent = None) -> None:
+    def __init__(
+        self,
+        apiKey: str,
+        modelId: str,
+        prompt: str,
+        generationConfig: Optional[dict] = None,
+        parent = None,
+    ) -> None:
         super().__init__(parent)
         self._apiKey = apiKey
         self._modelId = modelId
         self._prompt = prompt
+        self._generationConfig = generationConfig
 
     def run(self) -> None:
         url = buildRequestUrl(modelId = self._modelId, apiKey = self._apiKey)
-        payload = buildRequestPayload(self._prompt)
+        payload = buildRequestPayload(self._prompt, self._generationConfig)
         request = urllib.request.Request(
             url,
             data = payload,
