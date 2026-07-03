@@ -1,7 +1,7 @@
 import json
 import re
 import unicodedata
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import aqt.reviewer
 from aqt import gui_hooks, mw
@@ -9,7 +9,7 @@ from aqt.utils import askUser, showInfo
 from anki.cards import Card
 from .configDialog import DEFAULT_CONFIG, DEFAULT_PROMPT, SCHEMA_VERSION
 
-from .geminiApi import GeminiWorker
+from .aiModelWorker import AiModelWorker, createModelWorker
 from .memory import (
     MAX_MEMORY_POINTS,
     MEMORY_GENERATION_CONFIG,
@@ -204,7 +204,7 @@ def replaceContainerWithError(message: str) -> None:
     """)
 
 
-def onApiSuccess(text: str, worker: GeminiWorker) -> None:
+def onApiSuccess(text: str, worker: AiModelWorker) -> None:
     _state.pop('worker', None)
     _state['lastAiResponse'] = text
     replaceContainerWithResult(text)
@@ -212,11 +212,12 @@ def onApiSuccess(text: str, worker: GeminiWorker) -> None:
 
 def _onApiErrorWithFallback(
     message: str,
-    worker: GeminiWorker,
+    worker: Optional[AiModelWorker],
     modelIds: list[str],
     index: int,
     prompt: str,
-    apiKey: str,
+    geminiApiKey: str,
+    claudeApiKey: str,
 ) -> None:
     _state.pop('worker', None)
     if index + 1 < len(modelIds):
@@ -224,7 +225,8 @@ def _onApiErrorWithFallback(
             modelIds = modelIds,
             index = index + 1,
             prompt = prompt,
-            apiKey = apiKey,
+            geminiApiKey = geminiApiKey,
+            claudeApiKey = claudeApiKey,
         )
     else:
         replaceContainerWithError(message)
@@ -234,17 +236,38 @@ def triggerApiCallWithIndex(
     modelIds: list[str],
     index: int,
     prompt: str,
-    apiKey: str,
+    geminiApiKey: str,
+    claudeApiKey: str,
 ) -> None:
     if index == 0:
         setButtonChecking()
     else:
         setButtonRetrying(current = index, total = len(modelIds))
 
-    worker = GeminiWorker(apiKey = apiKey, modelId = modelIds[index], prompt = prompt)
+    modelId = modelIds[index]
+    worker = createModelWorker(
+        modelId = modelId,
+        geminiApiKey = geminiApiKey,
+        claudeApiKey = claudeApiKey,
+        prompt = prompt,
+    )
+    if worker is None:
+        _onApiErrorWithFallback(
+            f"Model '{modelId}' is unsupported or its API key is missing.",
+            None,
+            modelIds,
+            index,
+            prompt,
+            geminiApiKey,
+            claudeApiKey,
+        )
+        return
+
     worker.success.connect(lambda text, w = worker: onApiSuccess(text, w))
     worker.error.connect(
-        lambda msg, w = worker: _onApiErrorWithFallback(msg, w, modelIds, index, prompt, apiKey)
+        lambda msg, w = worker: _onApiErrorWithFallback(
+            msg, w, modelIds, index, prompt, geminiApiKey, claudeApiKey
+        )
     )
     worker.finished.connect(worker.deleteLater)
     _state['worker'] = worker
@@ -253,8 +276,9 @@ def triggerApiCallWithIndex(
 
 def triggerApiCall() -> None:
     config = mw.addonManager.getConfig(__name__) or {}
-    apiKey: str = config.get('apiKey', '').strip()
-    if not apiKey:
+    geminiApiKey: str = config.get('apiKey', '').strip()
+    claudeApiKey: str = config.get('claudeApiKey', '').strip()
+    if not geminiApiKey and not claudeApiKey:
         replaceContainerWithError(
             'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.'
         )
@@ -268,7 +292,13 @@ def triggerApiCall() -> None:
     modelIds = getModelIds(config)
     prompt = buildPrompt(card, config)
 
-    triggerApiCallWithIndex(modelIds = modelIds, index = 0, prompt = prompt, apiKey = apiKey)
+    triggerApiCallWithIndex(
+        modelIds = modelIds,
+        index = 0,
+        prompt = prompt,
+        geminiApiKey = geminiApiKey,
+        claudeApiKey = claudeApiKey,
+    )
 
 
 def injectButton() -> None:
@@ -310,13 +340,13 @@ def onRenderComparedAnswer(
     return output
 
 
-def _onMemoryUpdateSuccess(text: str, worker: GeminiWorker, deckName: str) -> None:
+def _onMemoryUpdateSuccess(text: str, worker: AiModelWorker, deckName: str) -> None:
     points = parseMemoryResponse(text, MAX_MEMORY_POINTS)
     if points is not None:
         saveDeckMemory(deckName, points)
 
 
-def _discardMemoryWorker(worker: GeminiWorker) -> None:
+def _discardMemoryWorker(worker: AiModelWorker) -> None:
     if worker in _memoryWorkers:
         _memoryWorkers.remove(worker)
     worker.deleteLater()
@@ -327,8 +357,9 @@ def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
         return
 
     config = mw.addonManager.getConfig(__name__) or {}
-    apiKey: str = config.get('apiKey', '').strip()
-    if not apiKey:
+    geminiApiKey: str = config.get('apiKey', '').strip()
+    claudeApiKey: str = config.get('claudeApiKey', '').strip()
+    if not geminiApiKey and not claudeApiKey:
         return
     modelIds = getModelIds(config)
 
@@ -342,12 +373,15 @@ def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
         ease = ease,
     )
 
-    worker = GeminiWorker(
-        apiKey = apiKey,
+    worker = createModelWorker(
         modelId = modelIds[0],
+        geminiApiKey = geminiApiKey,
+        claudeApiKey = claudeApiKey,
         prompt = prompt,
         generationConfig = MEMORY_GENERATION_CONFIG,
     )
+    if worker is None:
+        return
     worker.success.connect(
         lambda text, w = worker, d = deckName: _onMemoryUpdateSuccess(text, w, d)
     )
@@ -384,14 +418,21 @@ def onJsMessage(
     return handled
 
 
-def _migrateConfigV1ToV2(config: dict) -> dict:
+def _migrateLegacyModelList(config: dict) -> list[str]:
+    if 'models' in config:
+        return config['models']
     model: str = config.get('model', 'gemini-3.1-flash-lite')
     customModelId: str = config.get('customModelId', '')
     resolvedModelId = (customModelId.strip() or 'gemini-3.1-flash-lite') if model == 'custom' else model
+    return [resolvedModelId]
+
+
+def _migrateConfig(config: dict) -> dict:
     return {
         'schemaVersion': SCHEMA_VERSION,
-        'models': [resolvedModelId],
+        'models': _migrateLegacyModelList(config),
         'apiKey': config.get('apiKey', ''),
+        'claudeApiKey': config.get('claudeApiKey', ''),
         'prompts': config.get('prompts', DEFAULT_CONFIG['prompts']),
     }
 
@@ -400,11 +441,10 @@ def migrateConfigIfNeeded() -> None:
     config = mw.addonManager.getConfig(__name__)
     if not config:
         return
-    isV1 = 'model' in config or 'customModelId' in config
-    if not isV1 and config.get('schemaVersion') == SCHEMA_VERSION:
+    if config.get('schemaVersion') == SCHEMA_VERSION and 'claudeApiKey' in config:
         return
     try:
-        newConfig = _migrateConfigV1ToV2(config)
+        newConfig = _migrateConfig(config)
         mw.addonManager.writeConfig(__name__, newConfig)
         showInfo('Typed Answer Checker by AI: Configuration Updated')
     except Exception as e:

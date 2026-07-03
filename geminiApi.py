@@ -1,9 +1,7 @@
 import json
-import urllib.error
-import urllib.request
 from typing import Optional
 
-from aqt.qt import QThread, pyqtSignal
+from .aiModelWorker import AiModelWorker
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelId}:generateContent?key={apiKey}"
 
@@ -23,47 +21,9 @@ def extractResponseText(data: dict) -> str:
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def extractHttpErrorMessage(code: int, body: str) -> str:
-    try:
-        return json.loads(body)["error"]["message"]
-    except Exception:
-        return f"HTTP {code}: {body}"
-
-
-class GeminiWorker(QThread):
-    success = pyqtSignal(str)
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        apiKey: str,
-        modelId: str,
-        prompt: str,
-        generationConfig: Optional[dict] = None,
-        parent = None,
-    ) -> None:
-        super().__init__(parent)
-        self._apiKey = apiKey
-        self._modelId = modelId
-        self._prompt = prompt
-        self._generationConfig = generationConfig
-
-    def run(self) -> None:
+class GeminiWorker(AiModelWorker):
+    def _requestCompletion(self) -> str:
         url = buildRequestUrl(modelId = self._modelId, apiKey = self._apiKey)
         payload = buildRequestPayload(self._prompt, self._generationConfig)
-        request = urllib.request.Request(
-            url,
-            data = payload,
-            headers = {"Content-Type": "application/json"},
-            method = "POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout = 120) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            text = extractResponseText(data)
-            self.success.emit(text.strip())
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors = "replace")
-            self.error.emit(extractHttpErrorMessage(e.code, body))
-        except Exception as e:
-            self.error.emit(str(e))
+        data = self._postJson(url, {"Content-Type": "application/json"}, payload)
+        return extractResponseText(data)

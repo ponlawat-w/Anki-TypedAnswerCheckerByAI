@@ -36,12 +36,19 @@ PRESET_MODELS: list[str] = [
     'gemini-3.1-flash-lite',
     'gemini-3.5-flash',
     'gemini-3.1-pro-preview',
+    'claude-haiku-4-5',
+    'claude-sonnet-5',
+    'claude-sonnet-5-adaptive-thinking',
+    'claude-opus-4-8',
+    'claude-opus-4-8-adaptive-thinking',
+    'claude-fable-5-adaptive-thinking',
 ]
 
 DEFAULT_CONFIG: dict = {
     'schemaVersion': SCHEMA_VERSION,
     'models': ['gemini-3.1-flash-lite'],
     'apiKey': '',
+    'claudeApiKey': '',
     'prompts': {
         'default': DEFAULT_PROMPT,
         'decks': {},
@@ -126,6 +133,7 @@ class ConfigDialog(QDialog):
         layout.addWidget(self._modelListContainer)
 
         layout.addLayout(self._buildApiKeyRow())
+        layout.addLayout(self._buildClaudeApiKeyRow())
         return box
 
     def _buildModelComboOptions(self) -> list[str]:
@@ -279,6 +287,14 @@ class ConfigDialog(QDialog):
         self._apiKeyEdit.setEchoMode(QLineEdit.EchoMode.Password)
         row.addWidget(QLabel('Google AI Studio API key:'))
         row.addWidget(self._apiKeyEdit)
+        return row
+
+    def _buildClaudeApiKeyRow(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self._claudeApiKeyEdit = QLineEdit()
+        self._claudeApiKeyEdit.setEchoMode(QLineEdit.EchoMode.Password)
+        row.addWidget(QLabel('Claude API key:'))
+        row.addWidget(self._claudeApiKeyEdit)
         return row
 
     def _buildPromptSection(self) -> QGroupBox:
@@ -450,6 +466,7 @@ class ConfigDialog(QDialog):
         self._updateModelErrorLabel()
 
         self._apiKeyEdit.setText(self._config.get('apiKey', ''))
+        self._claudeApiKeyEdit.setText(self._config.get('claudeApiKey', ''))
 
         self._isLoading = False
 
@@ -484,6 +501,7 @@ class ConfigDialog(QDialog):
             'schemaVersion': SCHEMA_VERSION,
             'models': resolvedModels,
             'apiKey': self._apiKeyEdit.text().strip(),
+            'claudeApiKey': self._claudeApiKeyEdit.text().strip(),
             'prompts': {
                 'default': self._tempPrompts.get(DEFAULT_PROMPT_SETTINGS_KEY, DEFAULT_PROMPT),
                 'decks': deckPrompts,
