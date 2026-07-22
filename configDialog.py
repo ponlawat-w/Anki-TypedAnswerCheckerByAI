@@ -30,11 +30,15 @@ _defaultConfig: dict = json.load(
 
 SCHEMA_VERSION: int = _defaultConfig['schemaVersion']
 
+DEFAULT_MODEL_ID: str = _defaultConfig['models'][0]
+
 PRESET_MODELS: list[str] = [
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
     'gemini-3.5-flash',
+    'gemini-3.6-flash',
     'gemini-3.1-pro-preview',
     'claude-haiku-4-5',
     'claude-sonnet-5',
@@ -46,7 +50,7 @@ PRESET_MODELS: list[str] = [
 
 DEFAULT_CONFIG: dict = {
     'schemaVersion': SCHEMA_VERSION,
-    'models': ['gemini-3.1-flash-lite'],
+    'models': [DEFAULT_MODEL_ID],
     'apiKey': '',
     'claudeApiKey': '',
     'prompts': {
@@ -60,7 +64,7 @@ DEFAULT_PROMPT_SETTINGS_KEY: str = '__default__'
 DECK_KEY_PREFIX: str = 'deck::'
 CARD_TYPE_KEY_PREFIX: str = 'cardType::'
 
-CUSTOM_MODEL_PLACEHOLDER: str = 'Enter model ID from Google AI Studio, e.g. gemini-3.1-flash-lite'
+CUSTOM_MODEL_PLACEHOLDER: str = f'Enter model ID from Google AI Studio, e.g. {DEFAULT_MODEL_ID}'
 CUSTOM_MODEL_DEFAULT_TEXT: str = 'custom-model-name'
 
 
@@ -459,7 +463,7 @@ class ConfigDialog(QDialog):
                 self._tempPrompts[f'{CARD_TYPE_KEY_PREFIX}{cardTypeKey}'] = value
 
         self._clearModelRows()
-        models: list[str] = self._config.get('models', ['gemini-3.1-flash-lite'])
+        models: list[str] = self._config.get('models', [DEFAULT_MODEL_ID])
         for modelId in models:
             self._createModelRow(modelId)
         self._appendEmptyModelRow()

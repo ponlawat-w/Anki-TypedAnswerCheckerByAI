@@ -7,7 +7,7 @@ import aqt.reviewer
 from aqt import gui_hooks, mw
 from aqt.utils import askUser, showInfo
 from anki.cards import Card
-from .configDialog import DEFAULT_CONFIG, DEFAULT_PROMPT, SCHEMA_VERSION
+from .configDialog import DEFAULT_CONFIG, DEFAULT_MODEL_ID, DEFAULT_PROMPT, SCHEMA_VERSION
 
 from .aiModelWorker import AiModelWorker, createModelWorker
 from .memory import (
@@ -68,7 +68,7 @@ def answersMatch(expected: str, provided: str) -> bool:
 
 def getModelIds(config: dict) -> list[str]:
     models: list[str] = [m for m in config.get('models', []) if m]
-    return models if models else ['gemini-3.1-flash-lite']
+    return models if models else [DEFAULT_MODEL_ID]
 
 
 def getPromptForCard(card: Card, config: dict) -> str:
@@ -421,9 +421,9 @@ def onJsMessage(
 def _migrateLegacyModelList(config: dict) -> list[str]:
     if 'models' in config:
         return config['models']
-    model: str = config.get('model', 'gemini-3.1-flash-lite')
+    model: str = config.get('model', DEFAULT_MODEL_ID)
     customModelId: str = config.get('customModelId', '')
-    resolvedModelId = (customModelId.strip() or 'gemini-3.1-flash-lite') if model == 'custom' else model
+    resolvedModelId = (customModelId.strip() or DEFAULT_MODEL_ID) if model == 'custom' else model
     return [resolvedModelId]
 
 
