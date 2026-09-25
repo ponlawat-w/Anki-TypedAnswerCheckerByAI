@@ -63,7 +63,7 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 
 ### Web search
 
-AI checks on Gemini models always have **Grounding with Google Search** enabled. The model decides for itself when a search is worth it (e.g. for proper nouns, facts, or recent usage), so most checks run without one. Search queries may be billed by Google on top of normal token usage once past the free allowance. Learning-memory updates never use search. Claude models do not use web search.
+AI checks on Gemini models always have **Grounding with Google Search** enabled. The model decides for itself when a search is worth it (e.g. for proper nouns, facts, or recent usage), so most checks run without one. Search queries may be billed by Google on top of normal token usage once past the free allowance. If the search quota is exceeded (HTTP 429), the add-on retries the same model once without search before falling back to the next model. Learning-memory updates never use search. Claude models do not use web search.
 
 ### Prompt resolution order
 
