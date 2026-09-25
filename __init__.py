@@ -250,6 +250,7 @@ def triggerApiCallWithIndex(
         geminiApiKey = geminiApiKey,
         claudeApiKey = claudeApiKey,
         prompt = prompt,
+        useWebSearch = True,
     )
     if worker is None:
         _onApiErrorWithFallback(

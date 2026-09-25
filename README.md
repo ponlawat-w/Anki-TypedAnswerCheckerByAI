@@ -61,6 +61,10 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 - Duplicate model IDs are allowed; this causes the add-on to retry the same model before moving on.
 - Each model is routed to its provider by ID prefix: `gemini-` → Gemini (Google AI Studio key), `claude-` → Claude (Claude API key). A custom model with any other prefix, or one whose provider key is blank, is skipped and the add-on falls through to the next model.
 
+### Web search
+
+AI checks on Gemini models always have **Grounding with Google Search** enabled. The model decides for itself when a search is worth it (e.g. for proper nouns, facts, or recent usage), so most checks run without one. Search queries may be billed by Google on top of normal token usage once past the free allowance. Learning-memory updates never use search. Claude models do not use web search.
+
 ### Prompt resolution order
 
 When a card is checked, the prompt is selected in this priority order:
@@ -99,12 +103,12 @@ Any model ID supported by the Gemini API or the Anthropic Claude API can be ente
 
 **Gemini** (Google AI Studio key)
 
-- `gemini-2.5-flash`
-- `gemini-2.5-pro`
 - `gemini-3.1-flash-lite`
 - `gemini-3.5-flash-lite` (default)
 - `gemini-3.5-flash`
 - `gemini-3.6-flash`
+- `gemini-3.7-flash`
+- `gemini-3.8-flash`
 - `gemini-3.1-pro-preview`
 
 **Claude** (Claude API key)
@@ -114,6 +118,8 @@ Any model ID supported by the Gemini API or the Anthropic Claude API can be ente
 - `claude-sonnet-5-adaptive-thinking`
 - `claude-opus-4-8`
 - `claude-opus-4-8-adaptive-thinking`
+- `claude-opus-5-5-adaptive-thinking`
 - `claude-fable-5-adaptive-thinking`
+- `claude-fable-5-1-adaptive-thinking`
 
-Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning). Haiku 4.5 has no adaptive-thinking mode; Fable 5 always thinks, so only its `-adaptive-thinking` preset is listed. You can also add these suffixes to any custom Claude model ID.
+Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning). Haiku 4.5 has no adaptive-thinking mode; Opus 5.5, Fable 5 and Fable 5.1 always think, so only their `-adaptive-thinking` presets are listed. You can also add these suffixes to any custom Claude model ID.

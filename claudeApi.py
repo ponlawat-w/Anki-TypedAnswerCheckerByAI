@@ -14,7 +14,7 @@ ADAPTIVE_THINKING_SUFFIX = "-adaptive-thinking"
 
 # Models whose thinking is always on: an explicit thinking:{"type":"disabled"}
 # is rejected with a 400, so "off" means omitting the parameter entirely.
-ALWAYS_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
+ALWAYS_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-", "claude-opus-5-5")
 
 
 def resolveModelId(modelId: str) -> Tuple[str, bool]:

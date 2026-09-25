@@ -27,6 +27,7 @@ class AiModelWorker(QThread):
         modelId: str,
         prompt: str,
         generationConfig: Optional[dict] = None,
+        useWebSearch: bool = False,
         parent = None,
     ) -> None:
         super().__init__(parent)
@@ -34,6 +35,7 @@ class AiModelWorker(QThread):
         self._modelId = modelId
         self._prompt = prompt
         self._generationConfig = generationConfig
+        self._useWebSearch = useWebSearch
 
     def run(self) -> None:
         try:
@@ -73,6 +75,7 @@ def createModelWorker(
     claudeApiKey: str,
     prompt: str,
     generationConfig: Optional[dict] = None,
+    useWebSearch: bool = False,
 ) -> Optional[AiModelWorker]:
     from .geminiApi import GeminiWorker
     from .claudeApi import ClaudeWorker
@@ -86,6 +89,7 @@ def createModelWorker(
             modelId = modelId,
             prompt = prompt,
             generationConfig = generationConfig,
+            useWebSearch = useWebSearch,
         )
     if provider == CLAUDE_PROVIDER:
         if not claudeApiKey:
@@ -95,5 +99,6 @@ def createModelWorker(
             modelId = modelId,
             prompt = prompt,
             generationConfig = generationConfig,
+            useWebSearch = useWebSearch,
         )
     return None
