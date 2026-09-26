@@ -2,9 +2,9 @@ import json
 import urllib.error
 from typing import Optional
 
-from .aiModelWorker import AiModelWorker
+from .aiModelWorker import BLOCK_ANSWER, BLOCK_NOTICE, BLOCK_THINKING, AiModelWorker
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelId}:generateContent?key={apiKey}"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelId}:streamGenerateContent?alt=sse&key={apiKey}"
 GOOGLE_SEARCH_TOOL: dict = {"google_search": {}}
 QUOTA_EXCEEDED_STATUS_CODE: int = 429
 
@@ -13,26 +13,36 @@ def buildRequestUrl(modelId: str, apiKey: str) -> str:
     return GEMINI_API_URL.format(modelId = modelId, apiKey = apiKey)
 
 
+def buildGenerationConfig(generationConfig: Optional[dict]) -> dict:
+    # Ask for thought summaries so the reviewer can show the model's reasoning while it thinks.
+    mergedConfig = dict(generationConfig or {})
+    thinkingConfig = dict(mergedConfig.get("thinkingConfig", {}))
+    thinkingConfig.setdefault("includeThoughts", True)
+    mergedConfig["thinkingConfig"] = thinkingConfig
+    return mergedConfig
+
+
 def buildRequestPayload(
     prompt: str,
     generationConfig: Optional[dict] = None,
     useWebSearch: bool = False,
 ) -> bytes:
-    payload: dict = {"contents": [{"parts": [{"text": prompt}]}]}
-    if generationConfig:
-        payload["generationConfig"] = generationConfig
+    payload: dict = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": buildGenerationConfig(generationConfig),
+    }
     if useWebSearch:
         payload["tools"] = [GOOGLE_SEARCH_TOOL]
     return json.dumps(payload).encode("utf-8")
 
 
-def extractResponseText(data: dict) -> str:
-    # Grounded responses can split the answer across several text parts.
-    parts = data["candidates"][0]["content"]["parts"]
-    texts = [part["text"] for part in parts if "text" in part and not part.get("thought")]
-    if not texts:
-        raise ValueError("Gemini response contained no text.")
-    return "".join(texts)
+def extractChunkParts(chunk: dict) -> list[dict]:
+    if "error" in chunk:
+        raise RuntimeError(chunk["error"].get("message", "Gemini stream error."))
+    candidates = chunk.get("candidates") or []
+    if not candidates:
+        return []
+    return candidates[0].get("content", {}).get("parts") or []
 
 
 class GeminiWorker(AiModelWorker):
@@ -45,6 +55,7 @@ class GeminiWorker(AiModelWorker):
             # Search quota exhausted: retry the same model once without grounding.
             if httpError.code != QUOTA_EXCEEDED_STATUS_CODE:
                 raise
+            self._startBlock(BLOCK_NOTICE, "Google Search quota exceeded, retrying without search")
             return self._requestWithSearch(useWebSearch = False)
 
     def _requestWithSearch(self, useWebSearch: bool) -> str:
@@ -54,5 +65,33 @@ class GeminiWorker(AiModelWorker):
             generationConfig = self._generationConfig,
             useWebSearch = useWebSearch,
         )
-        data = self._postJson(url, {"Content-Type": "application/json"}, payload)
-        return extractResponseText(data)
+        # Grounded responses can split the answer across several text parts and chunks.
+        self._answerParts: list[str] = []
+        headers = {"Content-Type": "application/json"}
+        for chunk in self._streamServerSentEvents(url, headers, payload):
+            for part in extractChunkParts(chunk):
+                self._showPart(part)
+        text = "".join(self._answerParts)
+        if not text.strip():
+            raise ValueError("Gemini response contained no text.")
+        return text
+
+    def _showPart(self, part: dict) -> None:
+        text = part.get("text")
+        if not text:
+            return
+        if part.get("thought"):
+            if self._blockKind == BLOCK_ANSWER:
+                # Text followed by more thinking was an intermediate note, not the answer.
+                self._setBlockTitle("Note")
+                self._answerParts = []
+            if self._blockKind != BLOCK_THINKING:
+                self._startBlock(BLOCK_THINKING, "Thinking…")
+            self._appendBlockBody(text)
+            return
+        if self._blockKind != BLOCK_ANSWER:
+            if self._blockKind == BLOCK_THINKING:
+                self._setBlockTitle("Thought process")
+            self._startBlock(BLOCK_ANSWER, f"Answer · {self._modelId}")
+        self._answerParts.append(text)
+        self._appendBlockBody(text)

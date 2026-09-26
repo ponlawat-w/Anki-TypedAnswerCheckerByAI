@@ -10,6 +10,17 @@ from anki.cards import Card
 from .configDialog import DEFAULT_CONFIG, DEFAULT_MODEL_ID, DEFAULT_PROMPT, SCHEMA_VERSION
 
 from .aiModelWorker import AiModelWorker, createModelWorker
+from .outputBlocks import (
+    BLOCK_FAILURE,
+    BLOCK_STATUS,
+    beginOutputBlock,
+    markdownToHtml,
+    plainTextToHtml,
+    setOutputBlockBody,
+    setOutputBlockTitle,
+    showOutputArea,
+    showRetryButton,
+)
 from .memory import (
     MAX_MEMORY_POINTS,
     MEMORY_GENERATION_CONFIG,
@@ -112,102 +123,37 @@ def buildPrompt(card: Card, config: dict) -> str:
     return prompt + buildContextBlock(card)
 
 
-def setButtonChecking() -> None:
-    buttonStyle = 'padding:6px 16px; cursor:pointer;'
-    safeButtonHtml = json.dumps(
-        f'<button id="typedAnswerCheckerByAI-button"'
-        f' onclick="pycmd(\'typedAnswerCheckerByAI-action-check\');"'
-        f' style="{buttonStyle}" disabled>Checking\u2026</button>'
-    )
-    mw.reviewer.web.eval(f"""
-        (function() {{
-            const container = document.getElementById('typedAnswerCheckerByAI-container');
-            if (container) {{
-                container.style.textAlign = 'center';
-                container.innerHTML = {safeButtonHtml};
-            }}
-        }})();
-    """)
+def _isCurrentWorker(worker: AiModelWorker) -> bool:
+    return _state.get('worker') is worker
 
 
-def setButtonRetrying(current: int, total: int) -> None:
-    label = json.dumps(f'Retrying\u2026 ({current}/{total})')
-    mw.reviewer.web.eval(f"""
-        (function() {{
-            const btn = document.getElementById('typedAnswerCheckerByAI-button');
-            if (btn) {{
-                btn.disabled = true;
-                btn.textContent = {label};
-            }}
-        }})();
-    """)
+def showFinalFailure(title: str, message: str) -> None:
+    beginOutputBlock(BLOCK_FAILURE, title)
+    setOutputBlockBody(plainTextToHtml(message))
+    showRetryButton()
 
 
-def markdownToHtml(text: str) -> str:
-    # Code blocks (must be processed before inline code)
-    text = re.sub(r'```.*?\n(.*?)```', lambda m: f'<pre><code>{m.group(1)}</code></pre>', text, flags = re.DOTALL)
-    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-    # Headers
-    text = re.sub(r'^### (.+)$', r'<h4>\1</h4>', text, flags = re.MULTILINE)
-    text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags = re.MULTILINE)
-    text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags = re.MULTILINE)
-    text = re.sub(r'^# (.+)$', r'<h1>\1</h1>', text, flags = re.MULTILINE)
-    # Bold and italic
-    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', text)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-    # Unordered lists
-    text = re.sub(
-        r'(?:^[*\-] .+$\n?)+',
-        lambda m: '<ul>' + re.sub(r'^[*\-]\s+(.+)$', r'<li>\1</li>', m.group(0), flags = re.MULTILINE) + '</ul>',
-        text,
-        flags = re.MULTILINE
-    )
-    # Line breaks
-    text = re.sub(r'\n{2,}', '</p><p>', text)
-    text = re.sub(r'\n', '<br>', text)
-    # Others
-    text = re.sub(r'^---$', '<hr>', text, flags = re.MULTILINE  )
-    text = re.sub(r'\$\\rightarrow\$', '→', text)
-    text = re.sub(r'\$\\leftarrow\$', '←', text)
-    return f'<p>{text}</p>'
+def onApiBlockStarted(kind: str, title: str, worker: AiModelWorker) -> None:
+    if _isCurrentWorker(worker):
+        beginOutputBlock(kind, title)
 
 
-def replaceContainerWithResult(text: str) -> None:
-    html = markdownToHtml(text)
-    safeHtml = json.dumps(html)
-    mw.reviewer.web.eval(f"""
-        (function() {{
-            const container = document.getElementById('typedAnswerCheckerByAI-container');
-            if (container) {{
-                container.style.textAlign = 'left';
-                container.innerHTML = '<hr>' + {safeHtml};
-            }}
-        }})();
-    """)
+def onApiBlockTitleChanged(title: str, worker: AiModelWorker) -> None:
+    if _isCurrentWorker(worker):
+        setOutputBlockTitle(title)
 
 
-def replaceContainerWithError(message: str) -> None:
-    safeMessage = json.dumps(message)
-    mw.reviewer.web.eval(f"""
-        (function() {{
-            const container = document.getElementById('typedAnswerCheckerByAI-container');
-            if (container) {{
-                container.style.textAlign = 'center';
-                const errorHtml = '<p style="color:red; margin:8px 4px;">' + {safeMessage} + '</p>';
-                const retryHtml = '<button id="typedAnswerCheckerByAI-button"'
-                    + ' onclick="pycmd(\\'typedAnswerCheckerByAI-action-check\\');"'
-                    + ' style="padding:6px 16px; cursor:pointer;">Retry (C)</button>';
-                container.innerHTML = errorHtml + retryHtml;
-            }}
-        }})();
-    """)
+def onApiBlockBodyChanged(body: str, worker: AiModelWorker) -> None:
+    if _isCurrentWorker(worker):
+        setOutputBlockBody(markdownToHtml(body))
 
 
 def onApiSuccess(text: str, worker: AiModelWorker) -> None:
+    # The answer has already been streamed into the active block.
+    if not _isCurrentWorker(worker):
+        return
     _state.pop('worker', None)
     _state['lastAiResponse'] = text
-    replaceContainerWithResult(text)
 
 
 def _onApiErrorWithFallback(
@@ -219,8 +165,13 @@ def _onApiErrorWithFallback(
     geminiApiKey: str,
     claudeApiKey: str,
 ) -> None:
+    if worker is not None and not _isCurrentWorker(worker):
+        return
     _state.pop('worker', None)
+    failureTitle = f'{modelIds[index]} failed'
     if index + 1 < len(modelIds):
+        beginOutputBlock(BLOCK_FAILURE, failureTitle)
+        setOutputBlockBody(plainTextToHtml(message))
         triggerApiCallWithIndex(
             modelIds = modelIds,
             index = index + 1,
@@ -229,7 +180,29 @@ def _onApiErrorWithFallback(
             claudeApiKey = claudeApiKey,
         )
     else:
-        replaceContainerWithError(message)
+        showFinalFailure(failureTitle, message)
+
+
+def _connectWorkerSignals(
+    worker: AiModelWorker,
+    modelIds: list[str],
+    index: int,
+    prompt: str,
+    geminiApiKey: str,
+    claudeApiKey: str,
+) -> None:
+    worker.blockStarted.connect(
+        lambda kind, title, w = worker: onApiBlockStarted(kind, title, w)
+    )
+    worker.blockTitleChanged.connect(lambda title, w = worker: onApiBlockTitleChanged(title, w))
+    worker.blockBodyChanged.connect(lambda body, w = worker: onApiBlockBodyChanged(body, w))
+    worker.success.connect(lambda text, w = worker: onApiSuccess(text, w))
+    worker.error.connect(
+        lambda msg, w = worker: _onApiErrorWithFallback(
+            msg, w, modelIds, index, prompt, geminiApiKey, claudeApiKey
+        )
+    )
+    worker.finished.connect(worker.deleteLater)
 
 
 def triggerApiCallWithIndex(
@@ -239,12 +212,8 @@ def triggerApiCallWithIndex(
     geminiApiKey: str,
     claudeApiKey: str,
 ) -> None:
-    if index == 0:
-        setButtonChecking()
-    else:
-        setButtonRetrying(current = index, total = len(modelIds))
-
     modelId = modelIds[index]
+    beginOutputBlock(BLOCK_STATUS, f'Asking {modelId}\u2026')
     worker = createModelWorker(
         modelId = modelId,
         geminiApiKey = geminiApiKey,
@@ -264,30 +233,33 @@ def triggerApiCallWithIndex(
         )
         return
 
-    worker.success.connect(lambda text, w = worker: onApiSuccess(text, w))
-    worker.error.connect(
-        lambda msg, w = worker: _onApiErrorWithFallback(
-            msg, w, modelIds, index, prompt, geminiApiKey, claudeApiKey
-        )
+    _connectWorkerSignals(
+        worker = worker,
+        modelIds = modelIds,
+        index = index,
+        prompt = prompt,
+        geminiApiKey = geminiApiKey,
+        claudeApiKey = claudeApiKey,
     )
-    worker.finished.connect(worker.deleteLater)
     _state['worker'] = worker
     worker.start()
 
 
 def triggerApiCall() -> None:
+    showOutputArea()
     config = mw.addonManager.getConfig(__name__) or {}
     geminiApiKey: str = config.get('apiKey', '').strip()
     claudeApiKey: str = config.get('claudeApiKey', '').strip()
     if not geminiApiKey and not claudeApiKey:
-        replaceContainerWithError(
-            'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.'
+        showFinalFailure(
+            'Cannot check',
+            'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.',
         )
         return
 
     card: Card = _state.get('card')
     if not card:
-        replaceContainerWithError('Error: card reference lost.')
+        showFinalFailure('Cannot check', 'Error: card reference lost.')
         return
 
     modelIds = getModelIds(config)

@@ -8,9 +8,18 @@ When reviewing a typed-answer card, Anki performs a strict character-by-characte
 
 Each model in your list is routed to a provider by its ID prefix: `gemini-` models use your Google AI Studio key, `claude-` models use your Claude API key. A model with any other prefix (or whose provider key is not configured) is skipped automatically.
 
-If the first model in your list fails, the add-on automatically retries with the next model. The button shows **Retrying… (n/m)** during fallback attempts. An error and **Retry** button appear only when all models have been exhausted. Clicking **Retry** starts over from the first model.
+If the first model in your list fails, the add-on automatically retries with the next model. An error and **Retry** button appear only when all models have been exhausted. Clicking **Retry** starts over from the first model.
 
-The AI response is rendered inline on the card — no separate window.
+### Live progress
+
+The response is streamed inline on the card — no separate window. While the AI works, the current step is shown below the answer as it happens:
+
+- **Thinking** — a summary of the model's reasoning (Gemini models, and Claude models that think)
+- **Searching / Searched** — the web search query and the pages found (Claude)
+- **… failed** — a model in your fallback list that errored, with its error message
+- **Answer** — the final explanation, streamed as it is written, with **Sources** when Claude cited web pages
+
+Only the latest step is expanded. Earlier steps collapse into small one-line titles above it, which you can click to expand, so once the answer is complete it takes up almost all of the space.
 
 ### Learning memory
 
@@ -23,7 +32,8 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 - Automatically detects typed-answer mismatches and injects the check button
 - Keyboard shortcut **C** to trigger the check without using the mouse
 - Multiple model support with automatic sequential fallback on error
-- Renders the AI response as formatted HTML (supports bold, italic, lists, code blocks, headers)
+- Streams the response live, with collapsible thinking / web search / failed-model steps above the answer
+- Renders the AI response as formatted HTML (supports bold, italic, lists, links, code blocks, headers)
 - Shows a **Retry** button on API errors
 - Per-deck and per-card-type prompt overrides — different decks or note type/card combinations can use different prompts
 - Per-deck learning memory that records recurring weak points and personalises future checks
@@ -63,7 +73,10 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 
 ### Web search
 
-AI checks on Gemini models always have **Grounding with Google Search** enabled. The model decides for itself when a search is worth it (e.g. for proper nouns, facts, or recent usage), so most checks run without one. Search queries may be billed by Google on top of normal token usage once past the free allowance. If the search quota is exceeded (HTTP 429), the add-on retries the same model once without search before falling back to the next model. Learning-memory updates never use search. Claude models do not use web search.
+AI checks always have web search available. The model decides for itself when a search is worth it, so most checks run without one. Learning-memory updates never use search.
+
+- **Gemini** uses **Grounding with Google Search** (e.g. for proper nouns, facts, or recent usage). Search queries may be billed by Google on top of normal token usage once past the free allowance. If the search quota is exceeded (HTTP 429), the add-on retries the same model once without search before falling back to the next model.
+- **Claude** uses Anthropic's web search tool, limited to **2 searches per check**. It is instructed to search only when it is unsure whether a word, spelling, form, or usage exists or is standard, and to prefer official dictionaries, language academies, and reputable grammar references. Each search costs $10 per 1,000 searches, plus the search results billed as input tokens, so a check that searches costs several times more than one that does not. Cited pages are listed as **Sources** under the answer. If an administrator has disabled web search for your Anthropic organization, Claude checks fail with an error and fall back to the next model.
 
 ### Prompt resolution order
 
@@ -122,4 +135,4 @@ Any model ID supported by the Gemini API or the Anthropic Claude API can be ente
 - `claude-fable-5-adaptive-thinking`
 - `claude-fable-5-1-adaptive-thinking`
 
-Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning). Haiku 4.5 has no adaptive-thinking mode; Opus 5.5, Fable 5 and Fable 5.1 always think, so only their `-adaptive-thinking` presets are listed. You can also add these suffixes to any custom Claude model ID.
+Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning), and a summary of that thinking is shown while it runs. Haiku 4.5 has no adaptive-thinking mode; Opus 5.5, Fable 5 and Fable 5.1 always think, so only their `-adaptive-thinking` presets are listed. You can also add these suffixes to any custom Claude model ID.
