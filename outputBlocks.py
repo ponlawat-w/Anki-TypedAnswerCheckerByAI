@@ -59,9 +59,10 @@ window.typedAnswerCheckerByAIOutput = {
         const container = document.getElementById('typedAnswerCheckerByAI-container');
         return container ? container.querySelector('.typedAnswerCheckerByAI-' + name) : null;
     },
-    start: function() {
+    start: function(retryButtonHtml) {
         const container = document.getElementById('typedAnswerCheckerByAI-container');
         if (!container) return;
+        this.retryButtonHtml = retryButtonHtml;
         container.style.textAlign = 'left';
         container.innerHTML = '<hr>'
             + '<div class="typedAnswerCheckerByAI-history"></div>'
@@ -119,6 +120,9 @@ window.typedAnswerCheckerByAIOutput = {
         const actionsElement = this.part('actions');
         if (actionsElement) actionsElement.innerHTML = actionsHtml;
     },
+    showRetry: function() {
+        this.setActions(this.retryButtonHtml || '');
+    },
 };
 """
 
@@ -163,14 +167,16 @@ def plainTextToHtml(text: str) -> str:
 
 def _callOutput(functionName: str, *arguments: str) -> None:
     argumentList = ', '.join(json.dumps(argument) for argument in arguments)
-    mw.reviewer.web.eval(
+    mw.web.eval(
         f'window.typedAnswerCheckerByAIOutput'
         f' && window.typedAnswerCheckerByAIOutput.{functionName}({argumentList});'
     )
 
 
-def showOutputArea() -> None:
-    mw.reviewer.web.eval(f"""
+def showOutputArea(retryButtonHtml: str) -> None:
+    # The area remembers its Retry button, so the shared fallback chain can offer a retry
+    # without knowing which feature (answer check, today's study) started the request.
+    mw.web.eval(f"""
         (function() {{
             if (!document.getElementById('typedAnswerCheckerByAI-style')) {{
                 const style = document.createElement('style');
@@ -180,7 +186,7 @@ def showOutputArea() -> None:
             }}
         }})();
         {OUTPUT_SCRIPT}
-        window.typedAnswerCheckerByAIOutput.start();
+        window.typedAnswerCheckerByAIOutput.start({json.dumps(retryButtonHtml)});
     """)
 
 
@@ -197,4 +203,4 @@ def setOutputBlockBody(bodyHtml: str) -> None:
 
 
 def showRetryButton() -> None:
-    _callOutput('setActions', RETRY_BUTTON_HTML)
+    _callOutput('showRetry')

@@ -1,18 +1,26 @@
 import json
-import re
-import unicodedata
 from typing import Any, Optional, Tuple
 
+import aqt.overview
 import aqt.reviewer
 from aqt import gui_hooks, mw
 from aqt.utils import askUser, showInfo
 from anki.cards import Card
-from .configDialog import DEFAULT_CONFIG, DEFAULT_MODEL_ID, DEFAULT_PROMPT, SCHEMA_VERSION
+from .configDialog import (
+    DEFAULT_CONFIG,
+    DEFAULT_MODEL_ID,
+    DEFAULT_PROMPT,
+    DEFAULT_SUMMARY_LANGUAGE,
+    SCHEMA_VERSION,
+    getParentDeckNames,
+)
 
-from .aiModelWorker import AiModelWorker, createModelWorker
+from .aiModelWorker import AiModelWorker, ModelRequest, createModelWorker
+from .cardText import normalizeText, stripHtml
 from .outputBlocks import (
     BLOCK_FAILURE,
     BLOCK_STATUS,
+    RETRY_BUTTON_HTML,
     beginOutputBlock,
     markdownToHtml,
     plainTextToHtml,
@@ -30,6 +38,17 @@ from .memory import (
     getDeckName,
     parseMemoryResponse,
     saveDeckMemory,
+)
+from .todayStudy import (
+    MODE_PREVIEW,
+    MODE_REVIEW,
+    buildTodayStudyOverviewHtml,
+    buildTodayStudyPrompt,
+    buildTodayStudyRetryButtonHtml,
+    injectTodayStudyButton,
+    isCongratsPageUrl,
+    isTodayStudyAvailable,
+    parseTodayStudyCommand,
 )
 
 CONTEXT_BLOCK_TEMPLATE: str = (
@@ -59,20 +78,6 @@ _state: dict = {}
 _backgroundWorkers: list = []
 
 
-def stripHtml(html: str) -> str:
-    html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags = re.DOTALL | re.IGNORECASE)
-    html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags = re.DOTALL | re.IGNORECASE)
-    html = re.sub(r'<[^>]+>', '', html)
-    html = re.sub(r'\s+', ' ', html)
-    return html.strip()
-
-
-def normalizeText(text: str) -> str:
-    text = stripHtml(text)
-    text = unicodedata.normalize('NFC', text)
-    return text.strip()
-
-
 def answersMatch(expected: str, provided: str) -> bool:
     return normalizeText(expected) == normalizeText(provided)
 
@@ -95,6 +100,17 @@ def getPromptForCard(card: Card, config: dict) -> str:
     if deckPrompt:
         return deckPrompt
     return prompts.get('default', DEFAULT_PROMPT)
+
+
+def getSummaryLanguage(config: dict, deckName: str) -> str:
+    # The deck's own language wins, then its nearest ancestor's, then the default.
+    summaryLanguages: dict = config.get('summaryLanguages', {})
+    deckLanguages: dict = summaryLanguages.get('decks', {})
+    for candidateDeckName in [deckName] + getParentDeckNames(deckName):
+        language = str(deckLanguages.get(candidateDeckName, '')).strip()
+        if language:
+            return language
+    return str(summaryLanguages.get('default', '')).strip() or DEFAULT_SUMMARY_LANGUAGE
 
 
 def buildContextBlock(card: Card) -> str:
@@ -143,7 +159,7 @@ def _cancelCheckWorker() -> None:
     _backgroundWorkers.append(worker)
 
 
-def resetReviewState() -> None:
+def resetState() -> None:
     _cancelCheckWorker()
     _state.clear()
 
@@ -180,38 +196,22 @@ def onApiSuccess(text: str, worker: AiModelWorker) -> None:
 def _onApiErrorWithFallback(
     message: str,
     worker: Optional[AiModelWorker],
-    modelIds: list[str],
+    request: ModelRequest,
     index: int,
-    prompt: str,
-    geminiApiKey: str,
-    claudeApiKey: str,
 ) -> None:
     if worker is not None and not _isCurrentWorker(worker):
         return
     _state.pop('worker', None)
-    failureTitle = f'{modelIds[index]} failed'
-    if index + 1 < len(modelIds):
+    failureTitle = f'{request.modelIds[index]} failed'
+    if index + 1 < len(request.modelIds):
         beginOutputBlock(BLOCK_FAILURE, failureTitle)
         setOutputBlockBody(plainTextToHtml(message))
-        triggerApiCallWithIndex(
-            modelIds = modelIds,
-            index = index + 1,
-            prompt = prompt,
-            geminiApiKey = geminiApiKey,
-            claudeApiKey = claudeApiKey,
-        )
+        triggerApiCallWithIndex(request = request, index = index + 1)
     else:
         showFinalFailure(failureTitle, message)
 
 
-def _connectWorkerSignals(
-    worker: AiModelWorker,
-    modelIds: list[str],
-    index: int,
-    prompt: str,
-    geminiApiKey: str,
-    claudeApiKey: str,
-) -> None:
+def _connectWorkerSignals(worker: AiModelWorker, request: ModelRequest, index: int) -> None:
     worker.blockStarted.connect(
         lambda kind, title, w = worker: onApiBlockStarted(kind, title, w)
     )
@@ -219,63 +219,63 @@ def _connectWorkerSignals(
     worker.blockBodyChanged.connect(lambda body, w = worker: onApiBlockBodyChanged(body, w))
     worker.success.connect(lambda text, w = worker: onApiSuccess(text, w))
     worker.error.connect(
-        lambda msg, w = worker: _onApiErrorWithFallback(
-            msg, w, modelIds, index, prompt, geminiApiKey, claudeApiKey
-        )
+        lambda msg, w = worker: _onApiErrorWithFallback(msg, w, request, index)
     )
     worker.finished.connect(lambda w = worker: _discardBackgroundWorker(w))
 
 
-def triggerApiCallWithIndex(
-    modelIds: list[str],
-    index: int,
-    prompt: str,
-    geminiApiKey: str,
-    claudeApiKey: str,
-) -> None:
-    modelId = modelIds[index]
+def triggerApiCallWithIndex(request: ModelRequest, index: int) -> None:
+    modelId = request.modelIds[index]
     beginOutputBlock(BLOCK_STATUS, f'Asking {modelId}\u2026')
     worker = createModelWorker(
         modelId = modelId,
-        geminiApiKey = geminiApiKey,
-        claudeApiKey = claudeApiKey,
-        prompt = prompt,
-        useWebSearch = True,
+        geminiApiKey = request.geminiApiKey,
+        claudeApiKey = request.claudeApiKey,
+        prompt = request.prompt,
+        useWebSearch = request.useWebSearch,
     )
     if worker is None:
         _onApiErrorWithFallback(
             f"Model '{modelId}' is unsupported or its API key is missing.",
             None,
-            modelIds,
+            request,
             index,
-            prompt,
-            geminiApiKey,
-            claudeApiKey,
         )
         return
 
-    _connectWorkerSignals(
-        worker = worker,
-        modelIds = modelIds,
-        index = index,
-        prompt = prompt,
-        geminiApiKey = geminiApiKey,
-        claudeApiKey = claudeApiKey,
-    )
+    _connectWorkerSignals(worker = worker, request = request, index = index)
     _state['worker'] = worker
     worker.start()
 
 
+def hasApiKey(config: dict) -> bool:
+    return bool(config.get('apiKey', '').strip() or config.get('claudeApiKey', '').strip())
+
+
+def showMissingApiKeyFailure(title: str) -> None:
+    showFinalFailure(
+        title,
+        'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.',
+    )
+
+
+def runModelRequest(config: dict, prompt: str, useWebSearch: bool) -> None:
+    # Streams into the output area, which the caller has already shown.
+    request = ModelRequest(
+        modelIds = tuple(getModelIds(config)),
+        prompt = prompt,
+        geminiApiKey = config.get('apiKey', '').strip(),
+        claudeApiKey = config.get('claudeApiKey', '').strip(),
+        useWebSearch = useWebSearch,
+    )
+    triggerApiCallWithIndex(request = request, index = 0)
+
+
 def triggerApiCall() -> None:
-    showOutputArea()
+    showOutputArea(RETRY_BUTTON_HTML)
     config = mw.addonManager.getConfig(__name__) or {}
-    geminiApiKey: str = config.get('apiKey', '').strip()
-    claudeApiKey: str = config.get('claudeApiKey', '').strip()
-    if not geminiApiKey and not claudeApiKey:
-        showFinalFailure(
-            'Cannot check',
-            'No API key configured. Open Tools > Add-ons > AI Typed Answer Checker > Config.',
-        )
+    if not hasApiKey(config):
+        showMissingApiKeyFailure('Cannot check')
         return
 
     card: Card = _state.get('card')
@@ -283,16 +283,28 @@ def triggerApiCall() -> None:
         showFinalFailure('Cannot check', 'Error: card reference lost.')
         return
 
-    modelIds = getModelIds(config)
-    prompt = buildPrompt(card, config)
+    runModelRequest(config = config, prompt = buildPrompt(card, config), useWebSearch = True)
 
-    triggerApiCallWithIndex(
-        modelIds = modelIds,
-        index = 0,
-        prompt = prompt,
-        geminiApiKey = geminiApiKey,
-        claudeApiKey = claudeApiKey,
+
+def triggerTodayStudy(mode: str) -> None:
+    showOutputArea(buildTodayStudyRetryButtonHtml(mode))
+    config = mw.addonManager.getConfig(__name__) or {}
+    if not hasApiKey(config):
+        showMissingApiKeyFailure('Cannot summarise')
+        return
+
+    deck = mw.col.decks.current()
+    prompt = buildTodayStudyPrompt(
+        mode = mode,
+        deck = deck,
+        language = getSummaryLanguage(config, deck['name']),
     )
+    if prompt is None:
+        showFinalFailure('Cannot summarise', 'No learning memory or cards for today in this deck.')
+        return
+
+    # A study summary needs no fact lookups, so it runs without web search.
+    runModelRequest(config = config, prompt = prompt, useWebSearch = False)
 
 
 def injectButton() -> None:
@@ -380,7 +392,7 @@ def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
         startMemoryUpdate(card, ease)
     # The card is done: stop a check that is still streaming, even when no next question
     # follows (end of session, timebox dialog).
-    resetReviewState()
+    resetState()
 
 
 def onDidShowAnswer(card: Card) -> None:
@@ -389,7 +401,7 @@ def onDidShowAnswer(card: Card) -> None:
 
 
 def onDidShowQuestion(card: Card) -> None:
-    resetReviewState()
+    resetState()
     mw.reviewer.web.eval("""
         (function() {
             const container = document.getElementById('typedAnswerCheckerByAI-container');
@@ -403,11 +415,16 @@ def onJsMessage(
     message: str,
     context: Any,
 ) -> Tuple[bool, Any]:
-    if not isinstance(context, aqt.reviewer.Reviewer):
-        return handled
-    if message == 'typedAnswerCheckerByAI-action-check':
+    if isinstance(context, aqt.reviewer.Reviewer) and message == 'typedAnswerCheckerByAI-action-check':
         if _canStartCheck():
             triggerApiCall()
+        return (True, None)
+    if isinstance(context, aqt.overview.Overview):
+        mode = parseTodayStudyCommand(message)
+        if mode is None:
+            return handled
+        if _canStartTodayStudy():
+            triggerTodayStudy(mode)
         return (True, None)
     return handled
 
@@ -418,9 +435,39 @@ def _canStartCheck() -> bool:
     return mw.reviewer.state == 'answer' and 'worker' not in _state
 
 
+def _canStartTodayStudy() -> bool:
+    return mw.state == 'overview' and 'worker' not in _state
+
+
 def onReviewerWillEnd() -> None:
     # Leaving the review screen (deck overview, home, profile switch) shows no next question.
-    resetReviewState()
+    resetState()
+
+
+def onOverviewWillRenderContent(
+    overview: aqt.overview.Overview,
+    content: aqt.overview.OverviewContent,
+) -> None:
+    # A re-render replaces the page, including any summary that was streaming into it.
+    resetState()
+    if isTodayStudyAvailable(MODE_PREVIEW, mw.col.decks.current()):
+        content.table += buildTodayStudyOverviewHtml(MODE_PREVIEW)
+
+
+def onWebviewDidInjectStyleIntoPage(webview: Any) -> None:
+    # Once today's cards are done, the overview shows the "Congratulations" page instead,
+    # which never goes through overview_will_render_content.
+    if webview is not mw.web or mw.state != 'overview' or not isCongratsPageUrl(webview.url().path()):
+        return
+    resetState()
+    if isTodayStudyAvailable(MODE_REVIEW, mw.col.decks.current()):
+        injectTodayStudyButton(MODE_REVIEW)
+
+
+def onStateWillChange(newState: str, oldState: str) -> None:
+    # Leaving the overview stops a summary that is still streaming.
+    if oldState == 'overview':
+        resetState()
 
 
 def _migrateLegacyModelList(config: dict) -> list[str]:
@@ -438,6 +485,7 @@ def _migrateConfig(config: dict) -> dict:
         'models': _migrateLegacyModelList(config),
         'apiKey': config.get('apiKey', ''),
         'claudeApiKey': config.get('claudeApiKey', ''),
+        'summaryLanguages': config.get('summaryLanguages', DEFAULT_CONFIG['summaryLanguages']),
         'prompts': config.get('prompts', DEFAULT_CONFIG['prompts']),
     }
 
@@ -468,6 +516,9 @@ gui_hooks.reviewer_did_answer_card.append(onReviewerDidAnswerCard)
 gui_hooks.reviewer_did_show_answer.append(onDidShowAnswer)
 gui_hooks.reviewer_did_show_question.append(onDidShowQuestion)
 gui_hooks.reviewer_will_end.append(onReviewerWillEnd)
+gui_hooks.overview_will_render_content.append(onOverviewWillRenderContent)
+gui_hooks.webview_did_inject_style_into_page.append(onWebviewDidInjectStyleIntoPage)
+gui_hooks.state_will_change.append(onStateWillChange)
 gui_hooks.webview_did_receive_js_message.append(onJsMessage)
 gui_hooks.main_window_did_init.append(migrateConfigIfNeeded)
 mw.addonManager.setConfigAction(__name__, showConfig)

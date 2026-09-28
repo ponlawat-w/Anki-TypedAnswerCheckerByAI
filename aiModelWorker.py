@@ -2,6 +2,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Iterator, Optional
 
 from aqt.qt import QThread, pyqtSignal
@@ -17,6 +18,16 @@ BLOCK_NOTICE: str = 'notice'
 
 REQUEST_TIMEOUT_SECONDS: int = 120
 BLOCK_BODY_EMIT_INTERVAL_SECONDS: float = 0.1
+
+
+@dataclass(frozen = True)
+class ModelRequest:
+    # Everything the multi-model fallback chain needs to (re)try one prompt.
+    modelIds: tuple[str, ...]
+    prompt: str
+    geminiApiKey: str
+    claudeApiKey: str
+    useWebSearch: bool
 
 
 def getModelProvider(modelId: str) -> Optional[str]:

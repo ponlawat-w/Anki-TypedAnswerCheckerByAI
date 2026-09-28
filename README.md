@@ -27,6 +27,17 @@ The add-on keeps a per-deck **learning memory** — a short list of your recurri
 
 On every subsequent AI check, the deck's memory is appended to the prompt so the AI can personalise its feedback and emphasise your known weak points. The memory notes are kept in English internally but the AI is instructed to keep responding in the language of your prompt. Memory is stored in `user_files/memory.json` and is independent of your other settings (resetting settings does not clear it). You can wipe it from the config dialog with **Clear learning memory (all decks)**.
 
+### Today's study
+
+When you open a deck (click it on the home screen, or press **S**), the deck overview shows an extra AI button below the Study Now table:
+
+- **Preview Today's Study** — while cards are still due today. The add-on picks up to 25 of today's due cards you have struggled with most (ranked by how often you graded them Again, and to a lesser degree Hard, relative to their number of reviews), and asks the AI for a short list of concepts to keep in mind today, based on those cards and the deck's learning memory. The preview describes concepts only and does not reveal card questions or answers.
+- **Review Today's Study** — on the "Congratulations" screen once today's cards are done. The add-on picks up to 25 of the cards you studied today, filling the list with today's Again cards first, then Hard, Good and Easy, and asks the AI for overall feedback on the session: what went well, what caused trouble, and tips for next time.
+
+Press **I** (for "AI insight") instead of clicking the button; it also triggers **Retry** after a failure. Anki does not use this key on the deck overview. The summary streams below the button like an answer check, using the same model list and fallback. Parent decks include their subdecks. The button only appears when the deck has learning memory (run some AI checks first) and, for the review, when you have studied cards in it today. Summaries never use web search and do not change the learning memory.
+
+Summaries are written in the deck's **Today's Study summary language** (see Configuration). It is free text, so you can write things like `Thai` or `English, with Japanese words in kana`.
+
 ## Features
 
 - Automatically detects typed-answer mismatches and injects the check button
@@ -37,6 +48,7 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 - Shows a **Retry** button on API errors
 - Per-deck and per-card-type prompt overrides — different decks or note type/card combinations can use different prompts
 - Per-deck learning memory that records recurring weak points and personalises future checks
+- AI preview of today's study (before you start) and review of today's session (when you finish) on the deck overview, with keyboard shortcut **I**
 - Config dialog accessible from **Tools > Add-ons**
 
 ## Requirements
@@ -61,6 +73,7 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 | **Claude API key** | Your API key from [console.anthropic.com](https://console.anthropic.com/). Used for `claude-` models. |
 | **Default prompt** | The prompt template sent to the AI for all cards unless overridden. |
 | **Per-deck prompt** | Select a deck from the Prompt Settings dropdown to set a custom prompt for all cards in that deck. |
+| **Today's Study summary language** | Shown below the prompt when **Default** or a deck is selected (hidden for card types). The language the Preview / Review Today's Study summaries are written in. Free text; the default is `English`. A deck left blank uses its nearest parent deck's language, then the default; the box shows the inherited value as a hint. |
 | **Per-card-type prompt** | Select a specific note type + card combination to set a custom prompt for it. Takes priority over deck-level prompts. |
 
 ### Model list behaviour
@@ -73,7 +86,7 @@ On every subsequent AI check, the deck's memory is appended to the prompt so the
 
 ### Web search
 
-AI checks always have web search available. The model decides for itself when a search is worth it, so most checks run without one. Learning-memory updates never use search.
+AI checks always have web search available. The model decides for itself when a search is worth it, so most checks run without one. Learning-memory updates and today's-study summaries never use search.
 
 - **Gemini** uses **Grounding with Google Search** (e.g. for proper nouns, facts, or recent usage). Search queries may be billed by Google on top of normal token usage once past the free allowance. If the search quota is exceeded (HTTP 429), the add-on retries the same model once without search before falling back to the next model.
 - **Claude** uses Anthropic's web search tool, limited to **2 searches per check**. It is instructed to search only when it is unsure whether a word, spelling, form, or usage exists or is standard, and to prefer official dictionaries, language academies, and reputable grammar references. Each search costs $10 per 1,000 searches, plus the search results billed as input tokens, so a check that searches costs several times more than one that does not. Cited pages are listed as **Sources** under the answer. If an administrator has disabled web search for your Anthropic organization, Claude checks fail with an error and fall back to the next model.

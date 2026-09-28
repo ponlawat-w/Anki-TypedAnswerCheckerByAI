@@ -32,6 +32,8 @@ SCHEMA_VERSION: int = _defaultConfig['schemaVersion']
 
 DEFAULT_MODEL_ID: str = _defaultConfig['models'][0]
 
+DEFAULT_SUMMARY_LANGUAGE: str = _defaultConfig['summaryLanguages']['default']
+
 PRESET_MODELS: list[str] = [
     'gemini-3.1-flash-lite',
     'gemini-3.5-flash-lite',
@@ -55,6 +57,10 @@ DEFAULT_CONFIG: dict = {
     'models': [DEFAULT_MODEL_ID],
     'apiKey': '',
     'claudeApiKey': '',
+    'summaryLanguages': {
+        'default': DEFAULT_SUMMARY_LANGUAGE,
+        'decks': {},
+    },
     'prompts': {
         'default': DEFAULT_PROMPT,
         'decks': {},
@@ -68,6 +74,18 @@ CARD_TYPE_KEY_PREFIX: str = 'cardType::'
 
 CUSTOM_MODEL_PLACEHOLDER: str = f'Enter model ID from Google AI Studio, e.g. {DEFAULT_MODEL_ID}'
 CUSTOM_MODEL_DEFAULT_TEXT: str = 'custom-model-name'
+
+SUMMARY_LANGUAGE_TOOLTIP: str = (
+    "Language of the Preview / Review Today's Study summaries on the deck overview. Free text,"
+    ' e.g. "Thai" or "English, with Japanese words in kana". A deck left blank uses its'
+    ' parent deck\'s language, then the default.'
+)
+
+
+def getParentDeckNames(deckName: str) -> list[str]:
+    # Nearest first: "A::B::C" -> ["A::B", "A"].
+    parts = deckName.split('::')
+    return ['::'.join(parts[:length]) for length in range(len(parts) - 1, 0, -1)]
 
 
 def hasTypedAnswer(template: dict) -> bool:
@@ -109,6 +127,7 @@ class ConfigDialog(QDialog):
         self.setMinimumWidth(520)
         self._config: dict = mw.addonManager.getConfig(ADDON_MODULE) or {}
         self._tempPrompts: dict[str, str] = {}
+        self._tempSummaryLanguages: dict[str, str] = {}
         self._previousPromptSettingsIndex: int = 0
         self._modelRows: list[tuple[QComboBox, Optional[QLineEdit], QWidget, QLabel]] = []
         self._isLoading: bool = False
@@ -315,7 +334,20 @@ class ConfigDialog(QDialog):
             'Use {{cardQuestion}}, {{cardAnswer}}, {{userAnswer}} as placeholders.'
         )
         layout.addWidget(self._promptEdit)
+        layout.addWidget(self._buildSummaryLanguageRow())
         return box
+
+    def _buildSummaryLanguageRow(self) -> QWidget:
+        self._summaryLanguageRow = QWidget()
+        row = QHBoxLayout(self._summaryLanguageRow)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._summaryLanguageEdit = QLineEdit()
+        self._summaryLanguageEdit.setToolTip(SUMMARY_LANGUAGE_TOOLTIP)
+        label = QLabel("Today's Study summary language:")
+        label.setToolTip(SUMMARY_LANGUAGE_TOOLTIP)
+        row.addWidget(label)
+        row.addWidget(self._summaryLanguageEdit)
+        return self._summaryLanguageRow
 
     def _buildPromptSettingsRow(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -359,6 +391,7 @@ class ConfigDialog(QDialog):
 
     def _onPromptSettingsChanged(self, index: int) -> None:
         self._persistPromptForIndex(self._previousPromptSettingsIndex)
+        self._persistSummaryLanguageForIndex(self._previousPromptSettingsIndex)
         self._updatePromptSettingsLabels()
         self._previousPromptSettingsIndex = index
         self._refreshPromptArea()
@@ -403,7 +436,44 @@ class ConfigDialog(QDialog):
             self._config.get('prompts', {}).get('default', DEFAULT_PROMPT)
         )
 
+    def _summaryLanguageKeyForIndex(self, index: int) -> str:
+        # Summary languages exist for the default and for decks, not for card types.
+        if index == 0:
+            return DEFAULT_PROMPT_SETTINGS_KEY
+        key: str = self._promptSettingsCombo.itemData(index) or ''
+        return key if key.startswith(DECK_KEY_PREFIX) else ''
+
+    def _persistSummaryLanguageForIndex(self, index: int) -> None:
+        key = self._summaryLanguageKeyForIndex(index)
+        if not key:
+            return
+        language = self._summaryLanguageEdit.text().strip()
+        if language:
+            self._tempSummaryLanguages[key] = language
+        else:
+            self._tempSummaryLanguages.pop(key, None)
+
+    def _inheritedSummaryLanguage(self, deckName: str) -> str:
+        for parentDeckName in getParentDeckNames(deckName):
+            language = self._tempSummaryLanguages.get(f'{DECK_KEY_PREFIX}{parentDeckName}', '')
+            if language:
+                return language
+        return self._tempSummaryLanguages.get(DEFAULT_PROMPT_SETTINGS_KEY, '') or DEFAULT_SUMMARY_LANGUAGE
+
+    def _refreshSummaryLanguageRow(self) -> None:
+        key = self._summaryLanguageKeyForIndex(self._promptSettingsCombo.currentIndex())
+        self._summaryLanguageRow.setVisible(bool(key))
+        if not key:
+            return
+        self._summaryLanguageEdit.setText(self._tempSummaryLanguages.get(key, ''))
+        if key == DEFAULT_PROMPT_SETTINGS_KEY:
+            self._summaryLanguageEdit.setPlaceholderText(DEFAULT_SUMMARY_LANGUAGE)
+        else:
+            inherited = self._inheritedSummaryLanguage(key[len(DECK_KEY_PREFIX):])
+            self._summaryLanguageEdit.setPlaceholderText(f'Inherited: {inherited}')
+
     def _refreshPromptArea(self) -> None:
+        self._refreshSummaryLanguageRow()
         if self._isDefaultSelected():
             self._customPromptCheck.blockSignals(True)
             self._customPromptCheck.setChecked(False)
@@ -473,6 +543,7 @@ class ConfigDialog(QDialog):
 
         self._apiKeyEdit.setText(self._config.get('apiKey', ''))
         self._claudeApiKeyEdit.setText(self._config.get('claudeApiKey', ''))
+        self._loadSummaryLanguages()
 
         self._isLoading = False
 
@@ -480,8 +551,29 @@ class ConfigDialog(QDialog):
         self._promptSettingsCombo.setCurrentIndex(0)
         self._refreshPromptArea()
 
+    def _loadSummaryLanguages(self) -> None:
+        summaryLanguages: dict = self._config.get('summaryLanguages', {})
+        self._tempSummaryLanguages = {
+            DEFAULT_PROMPT_SETTINGS_KEY: summaryLanguages.get('default', DEFAULT_SUMMARY_LANGUAGE),
+        }
+        for (deckName, language) in summaryLanguages.get('decks', {}).items():
+            if language:
+                self._tempSummaryLanguages[f'{DECK_KEY_PREFIX}{deckName}'] = language
+
+    def _buildSummaryLanguagesConfig(self) -> dict:
+        deckLanguages: dict[str, str] = {
+            key[len(DECK_KEY_PREFIX):]: language
+            for (key, language) in self._tempSummaryLanguages.items()
+            if key.startswith(DECK_KEY_PREFIX) and language
+        }
+        return {
+            'default': self._tempSummaryLanguages.get(DEFAULT_PROMPT_SETTINGS_KEY, '') or DEFAULT_SUMMARY_LANGUAGE,
+            'decks': deckLanguages,
+        }
+
     def _saveAndClose(self) -> None:
         self._persistPromptForIndex(self._promptSettingsCombo.currentIndex())
+        self._persistSummaryLanguageForIndex(self._promptSettingsCombo.currentIndex())
 
         resolvedModels: list[str] = []
         for (combo, lineEdit, _, _) in self._modelRows:
@@ -508,6 +600,7 @@ class ConfigDialog(QDialog):
             'models': resolvedModels,
             'apiKey': self._apiKeyEdit.text().strip(),
             'claudeApiKey': self._claudeApiKeyEdit.text().strip(),
+            'summaryLanguages': self._buildSummaryLanguagesConfig(),
             'prompts': {
                 'default': self._tempPrompts.get(DEFAULT_PROMPT_SETTINGS_KEY, DEFAULT_PROMPT),
                 'decks': deckPrompts,

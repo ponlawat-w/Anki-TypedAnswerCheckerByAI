@@ -28,7 +28,8 @@ MEMORY_UPDATE_PROMPT: str = (
     "Current memory:\n{currentMemory}\n\n"
     "Update the memory so it captures general, recurring patterns useful across many cards."
     " Keep it concise: at most {maxPoints} short bullet points, each a single sentence written"
-    " in English. Merge related points and drop ones that no longer seem relevant. Return ONLY"
+    " in English, but keep words, spellings, and examples from the language being studied in"
+    " their original script (do not romanise or translate them). Merge related points and drop ones that no longer seem relevant. Return ONLY"
     " a JSON array of strings, for example: [\"point one\", \"point two\"]."
 )
 
@@ -53,11 +54,25 @@ def _writeMemory(memory: dict) -> None:
         json.dump(memory, memoryFile, ensure_ascii = False, indent = 2)
 
 
-def getDeckMemory(deckName: str) -> list[str]:
-    points = loadMemory().get(deckName, [])
+def _storedPoints(points: object) -> list[str]:
     if isinstance(points, list):
         return [str(point) for point in points if str(point).strip()]
     return []
+
+
+def getDeckMemory(deckName: str) -> list[str]:
+    return _storedPoints(loadMemory().get(deckName, []))
+
+
+def getDeckTreeMemory(deckName: str) -> dict[str, list[str]]:
+    # Memory is keyed by each card's own deck, so a parent deck gathers its subdecks' memory too.
+    treeMemory: dict[str, list[str]] = {}
+    for memoryDeckName, storedPoints in loadMemory().items():
+        if memoryDeckName == deckName or memoryDeckName.startswith(deckName + '::'):
+            points = _storedPoints(storedPoints)
+            if points:
+                treeMemory[memoryDeckName] = points
+    return treeMemory
 
 
 def saveDeckMemory(deckName: str, points: list[str]) -> None:
@@ -180,7 +195,7 @@ def _noteRevlogRows(card: Card) -> list[tuple[int, int]]:
         return []
 
 
-def _countsFromRows(rows: list[tuple[int, int]]) -> dict[int, int]:
+def countRatings(rows: list[tuple[int, int]]) -> dict[int, int]:
     counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
     for _, ease in rows:
         if ease in counts:
@@ -197,7 +212,7 @@ def _formatDaysAgo(reviewIdMs: int) -> str:
     return f'{days} days ago'
 
 
-def _mostRecentByEase(rows: list[tuple[int, int]]) -> dict[int, str]:
+def describeLatestRatings(rows: list[tuple[int, int]]) -> dict[int, str]:
     latest: dict[int, int] = {}
     for reviewIdMs, ease in rows:
         if ease in (1, 2, 3, 4) and reviewIdMs > latest.get(ease, 0):
@@ -215,8 +230,8 @@ STATS_LINES_TEMPLATE: str = (
 
 
 def _statsLines(label: str, rows: list[tuple[int, int]]) -> str:
-    counts = _countsFromRows(rows)
-    recent = _mostRecentByEase(rows)
+    counts = countRatings(rows)
+    recent = describeLatestRatings(rows)
     return STATS_LINES_TEMPLATE.format(
         label = label,
         againCount = counts[1],
