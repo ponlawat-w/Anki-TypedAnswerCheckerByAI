@@ -40,6 +40,10 @@ def readServerSentEvents(response: object) -> Iterator[dict]:
         yield json.loads('\n'.join(dataLines))
 
 
+class RequestCancelled(Exception):
+    pass
+
+
 def formatMarkdownLink(title: str, url: str) -> str:
     safeTitle = (title or url).replace('[', '(').replace(']', ')').replace('\n', ' ')
     safeUrl = url.replace(' ', '%20').replace('(', '%28').replace(')', '%29')
@@ -74,17 +78,28 @@ class AiModelWorker(QThread):
         self._blockBody: str = ''
         self._blockBodyPending: bool = False
         self._lastBlockBodyEmitTime: float = 0.0
+        self._cancelled: bool = False
 
     def run(self) -> None:
         try:
             text = self._requestCompletion()
+            self._raiseIfCancelled()
             self._flushBlockBody()
             self.success.emit(text.strip())
-        except urllib.error.HTTPError as httpError:
-            body = httpError.read().decode('utf-8', errors = 'replace')
-            self.error.emit(self._extractHttpErrorMessage(httpError.code, body))
-        except Exception as otherError:
-            self.error.emit(str(otherError))
+        except RequestCancelled:
+            pass
+        except Exception as requestError:
+            if not self._cancelled:
+                self.error.emit(self._describeError(requestError))
+
+    def cancel(self) -> None:
+        # Called from the main thread. The stream stops at its next event (a blocked read only
+        # returns on new data or the request timeout); no further signal or request follows.
+        self._cancelled = True
+
+    def _raiseIfCancelled(self) -> None:
+        if self._cancelled:
+            raise RequestCancelled()
 
     def _requestCompletion(self) -> str:
         raise NotImplementedError
@@ -116,6 +131,13 @@ class AiModelWorker(QThread):
         self._lastBlockBodyEmitTime = time.monotonic()
         self.blockBodyChanged.emit(self._blockBody)
 
+    @classmethod
+    def _describeError(cls, requestError: Exception) -> str:
+        if isinstance(requestError, urllib.error.HTTPError):
+            body = requestError.read().decode('utf-8', errors = 'replace')
+            return cls._extractHttpErrorMessage(requestError.code, body)
+        return str(requestError)
+
     @staticmethod
     def _extractHttpErrorMessage(code: int, body: str) -> str:
         try:
@@ -123,8 +145,8 @@ class AiModelWorker(QThread):
         except Exception:
             return f'HTTP {code}: {body}'
 
-    @staticmethod
-    def _streamServerSentEvents(url: str, headers: dict, payload: bytes) -> Iterator[dict]:
+    def _streamServerSentEvents(self, url: str, headers: dict, payload: bytes) -> Iterator[dict]:
+        self._raiseIfCancelled()
         request = urllib.request.Request(
             url,
             data = payload,
@@ -132,7 +154,9 @@ class AiModelWorker(QThread):
             method = 'POST',
         )
         with urllib.request.urlopen(request, timeout = REQUEST_TIMEOUT_SECONDS) as response:
-            yield from readServerSentEvents(response)
+            for event in readServerSentEvents(response):
+                self._raiseIfCancelled()
+                yield event
 
 
 def createModelWorker(

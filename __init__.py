@@ -56,7 +56,7 @@ BUTTON_HTML: str = """
 """
 
 _state: dict = {}
-_memoryWorkers: list = []
+_backgroundWorkers: list = []
 
 
 def stripHtml(html: str) -> str:
@@ -125,6 +125,27 @@ def buildPrompt(card: Card, config: dict) -> str:
 
 def _isCurrentWorker(worker: AiModelWorker) -> bool:
     return _state.get('worker') is worker
+
+
+def _discardBackgroundWorker(worker: AiModelWorker) -> None:
+    if worker in _backgroundWorkers:
+        _backgroundWorkers.remove(worker)
+    worker.deleteLater()
+
+
+def _cancelCheckWorker() -> None:
+    # The request may still be streaming: keep the thread referenced until it notices the
+    # cancellation and finishes, so it is never garbage-collected while running.
+    worker: Optional[AiModelWorker] = _state.pop('worker', None)
+    if worker is None:
+        return
+    worker.cancel()
+    _backgroundWorkers.append(worker)
+
+
+def resetReviewState() -> None:
+    _cancelCheckWorker()
+    _state.clear()
 
 
 def showFinalFailure(title: str, message: str) -> None:
@@ -202,7 +223,7 @@ def _connectWorkerSignals(
             msg, w, modelIds, index, prompt, geminiApiKey, claudeApiKey
         )
     )
-    worker.finished.connect(worker.deleteLater)
+    worker.finished.connect(lambda w = worker: _discardBackgroundWorker(w))
 
 
 def triggerApiCallWithIndex(
@@ -319,16 +340,7 @@ def _onMemoryUpdateSuccess(text: str, worker: AiModelWorker, deckName: str) -> N
         saveDeckMemory(deckName, points)
 
 
-def _discardMemoryWorker(worker: AiModelWorker) -> None:
-    if worker in _memoryWorkers:
-        _memoryWorkers.remove(worker)
-    worker.deleteLater()
-
-
-def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
-    if not _state.get('card') or not _state.get('lastAiResponse'):
-        return
-
+def startMemoryUpdate(card: Card, ease: int) -> None:
     config = mw.addonManager.getConfig(__name__) or {}
     geminiApiKey: str = config.get('apiKey', '').strip()
     claudeApiKey: str = config.get('claudeApiKey', '').strip()
@@ -358,9 +370,17 @@ def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
     worker.success.connect(
         lambda text, w = worker, d = deckName: _onMemoryUpdateSuccess(text, w, d)
     )
-    worker.finished.connect(lambda w = worker: _discardMemoryWorker(w))
-    _memoryWorkers.append(worker)
+    worker.finished.connect(lambda w = worker: _discardBackgroundWorker(w))
+    _backgroundWorkers.append(worker)
     worker.start()
+
+
+def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
+    if _state.get('card') and _state.get('lastAiResponse'):
+        startMemoryUpdate(card, ease)
+    # The card is done: stop a check that is still streaming, even when no next question
+    # follows (end of session, timebox dialog).
+    resetReviewState()
 
 
 def onDidShowAnswer(card: Card) -> None:
@@ -369,7 +389,7 @@ def onDidShowAnswer(card: Card) -> None:
 
 
 def onDidShowQuestion(card: Card) -> None:
-    _state.clear()
+    resetReviewState()
     mw.reviewer.web.eval("""
         (function() {
             const container = document.getElementById('typedAnswerCheckerByAI-container');
@@ -386,9 +406,21 @@ def onJsMessage(
     if not isinstance(context, aqt.reviewer.Reviewer):
         return handled
     if message == 'typedAnswerCheckerByAI-action-check':
-        triggerApiCall()
+        if _canStartCheck():
+            triggerApiCall()
         return (True, None)
     return handled
+
+
+def _canStartCheck() -> bool:
+    # Drop clicks that arrive after the answer was left (e.g. queued behind a rating or bury)
+    # or while a check is already running.
+    return mw.reviewer.state == 'answer' and 'worker' not in _state
+
+
+def onReviewerWillEnd() -> None:
+    # Leaving the review screen (deck overview, home, profile switch) shows no next question.
+    resetReviewState()
 
 
 def _migrateLegacyModelList(config: dict) -> list[str]:
@@ -435,6 +467,7 @@ gui_hooks.reviewer_will_render_compared_answer.append(onRenderComparedAnswer)
 gui_hooks.reviewer_did_answer_card.append(onReviewerDidAnswerCard)
 gui_hooks.reviewer_did_show_answer.append(onDidShowAnswer)
 gui_hooks.reviewer_did_show_question.append(onDidShowQuestion)
+gui_hooks.reviewer_will_end.append(onReviewerWillEnd)
 gui_hooks.webview_did_receive_js_message.append(onJsMessage)
 gui_hooks.main_window_did_init.append(migrateConfigIfNeeded)
 mw.addonManager.setConfigAction(__name__, showConfig)
