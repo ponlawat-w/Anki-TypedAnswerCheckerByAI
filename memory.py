@@ -14,11 +14,23 @@ EASE_LABELS: dict[int, str] = {1: 'again', 2: 'hard', 3: 'good', 4: 'easy'}
 
 MEMORY_GENERATION_CONFIG: dict = {'responseMimeType': 'application/json'}
 
-MEMORY_UPDATE_PROMPT: str = (
+MEMORY_TASK_INTRODUCTION: str = (
     "You are maintaining a long-term study memory for a learner using Anki. The memory is a"
     " short list of the learner's recurring mistakes, misconceptions, and weak points across"
     " many cards — NOT facts about any single card.\n\n"
-    "Review the latest answer attempt below and produce an updated memory.\n\n"
+)
+
+MEMORY_OUTPUT_INSTRUCTIONS: str = (
+    "Update the memory so it captures general, recurring patterns useful across many cards."
+    " Keep it concise: at most {maxPoints} short bullet points, each a single sentence written"
+    " in English, but keep words, spellings, and examples from the language being studied in"
+    " their original script (do not romanise or translate them). Merge related points and drop ones that no longer seem relevant. Return ONLY"
+    " a JSON array of strings, for example: [\"point one\", \"point two\"]."
+)
+
+MEMORY_UPDATE_PROMPT: str = (
+    MEMORY_TASK_INTRODUCTION
+    + "Review the latest answer attempt below and produce an updated memory.\n\n"
     "Question: {question}\n"
     "Expected answer: {expectedAnswer}\n"
     "Learner's answer: {userAnswer}\n"
@@ -26,11 +38,19 @@ MEMORY_UPDATE_PROMPT: str = (
     "Learner's self-rating: {easeLabel}\n"
     "{cardStats}\n"
     "Current memory:\n{currentMemory}\n\n"
-    "Update the memory so it captures general, recurring patterns useful across many cards."
-    " Keep it concise: at most {maxPoints} short bullet points, each a single sentence written"
-    " in English, but keep words, spellings, and examples from the language being studied in"
-    " their original script (do not romanise or translate them). Merge related points and drop ones that no longer seem relevant. Return ONLY"
-    " a JSON array of strings, for example: [\"point one\", \"point two\"]."
+    + MEMORY_OUTPUT_INSTRUCTIONS
+)
+
+DAILY_MEMORY_UPDATE_PROMPT: str = (
+    MEMORY_TASK_INTRODUCTION
+    + 'The learner has just finished today\'s study session for the deck "{deckName}". Below'
+    " are up to {cardLimit} of the cards they forgot (graded again) today, the ones forgotten"
+    " most often today first. {cardFieldsExplanation}\n\n"
+    "{cards}\n\n"
+    "Compare what the learner typed with the expected answers to find what went wrong, and"
+    " produce an updated memory.\n\n"
+    "Current memory:\n{currentMemory}\n\n"
+    + MEMORY_OUTPUT_INSTRUCTIONS
 )
 
 
@@ -64,11 +84,15 @@ def getDeckMemory(deckName: str) -> list[str]:
     return _storedPoints(loadMemory().get(deckName, []))
 
 
+def isInDeckTree(deckName: str, treeDeckName: str) -> bool:
+    return deckName == treeDeckName or deckName.startswith(treeDeckName + '::')
+
+
 def getDeckTreeMemory(deckName: str) -> dict[str, list[str]]:
     # Memory is keyed by each card's own deck, so a parent deck gathers its subdecks' memory too.
     treeMemory: dict[str, list[str]] = {}
     for memoryDeckName, storedPoints in loadMemory().items():
-        if memoryDeckName == deckName or memoryDeckName.startswith(deckName + '::'):
+        if isInDeckTree(memoryDeckName, deckName):
             points = _storedPoints(storedPoints)
             if points:
                 treeMemory[memoryDeckName] = points
@@ -254,26 +278,45 @@ def buildCardStatsBlock(card: Card) -> str:
     )
 
 
+def _formatCurrentMemory(points: list[str]) -> str:
+    return '\n'.join(f'- {point}' for point in points) if points else '(empty)'
+
+
 def buildMemoryUpdatePrompt(
-    card: Card,
+    currentMemory: list[str],
     question: str,
     expectedAnswer: str,
     userAnswer: str,
     aiResponse: str,
     ease: int,
+    cardStats: str,
     maxPoints: int = MAX_MEMORY_POINTS,
 ) -> str:
-    currentMemory = getDeckMemory(getDeckName(card))
-    currentMemoryText = (
-        '\n'.join(f'- {point}' for point in currentMemory) if currentMemory else '(empty)'
-    )
     return MEMORY_UPDATE_PROMPT.format(
         question = question,
         expectedAnswer = expectedAnswer,
         userAnswer = userAnswer,
         aiResponse = aiResponse,
         easeLabel = EASE_LABELS.get(ease, 'unknown'),
-        cardStats = buildCardStatsBlock(card),
-        currentMemory = currentMemoryText,
+        cardStats = cardStats,
+        currentMemory = _formatCurrentMemory(currentMemory),
+        maxPoints = maxPoints,
+    )
+
+
+def buildDailyMemoryUpdatePrompt(
+    currentMemory: list[str],
+    deckName: str,
+    cardLimit: int,
+    cardFieldsExplanation: str,
+    cards: str,
+    maxPoints: int = MAX_MEMORY_POINTS,
+) -> str:
+    return DAILY_MEMORY_UPDATE_PROMPT.format(
+        deckName = deckName,
+        cardLimit = cardLimit,
+        cardFieldsExplanation = cardFieldsExplanation,
+        cards = cards,
+        currentMemory = _formatCurrentMemory(currentMemory),
         maxPoints = maxPoints,
     )

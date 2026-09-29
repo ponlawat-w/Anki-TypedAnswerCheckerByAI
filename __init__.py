@@ -1,5 +1,6 @@
 import json
-from typing import Any, Optional, Tuple
+from functools import partial
+from typing import Any, Callable, Optional, Tuple
 
 import aqt.overview
 import aqt.reviewer
@@ -15,7 +16,7 @@ from .configDialog import (
     getParentDeckNames,
 )
 
-from .aiModelWorker import AiModelWorker, ModelRequest, createModelWorker
+from .aiModelWorker import BLOCK_NOTICE, AiModelWorker, ModelRequest, createModelWorker
 from .cardText import normalizeText, stripHtml
 from .outputBlocks import (
     BLOCK_FAILURE,
@@ -30,21 +31,24 @@ from .outputBlocks import (
     showRetryButton,
 )
 from .memory import (
-    MAX_MEMORY_POINTS,
-    MEMORY_GENERATION_CONFIG,
     buildCardStatsBlock,
+    buildDailyMemoryUpdatePrompt,
     buildMemoryUpdatePrompt,
     getDeckMemory,
     getDeckName,
-    parseMemoryResponse,
-    saveDeckMemory,
 )
+from .memoryUpdateQueue import MemoryUpdateQueue, MemoryUpdateTask
+from .studyLog import claimDailyMemoryUpdate, isDailyMemoryUpdateClaimed, saveTypedAnswer
 from .todayStudy import (
+    AGAIN_EASE,
+    CARD_FIELDS_EXPLANATION,
     MODE_PREVIEW,
     MODE_REVIEW,
+    TODAY_STUDY_CARD_LIMIT,
     buildTodayStudyOverviewHtml,
     buildTodayStudyPrompt,
     buildTodayStudyRetryButtonHtml,
+    getTodayAgainCardsByDeck,
     injectTodayStudyButton,
     isCongratsPageUrl,
     isTodayStudyAvailable,
@@ -76,6 +80,7 @@ BUTTON_HTML: str = """
 
 _state: dict = {}
 _backgroundWorkers: list = []
+_memoryUpdateQueue: MemoryUpdateQueue = MemoryUpdateQueue()
 
 
 def answersMatch(expected: str, provided: str) -> bool:
@@ -288,6 +293,39 @@ def triggerApiCall() -> None:
 
 def triggerTodayStudy(mode: str) -> None:
     showOutputArea(buildTodayStudyRetryButtonHtml(mode))
+    deckName: str = mw.col.decks.current()['name']
+    if _memoryUpdateQueue.isDeckTreeBusy(deckName):
+        _waitForMemoryUpdate(mode, deckName)
+        return
+    _requestTodayStudy(mode)
+
+
+def _waitForMemoryUpdate(mode: str, deckName: str) -> None:
+    # The summary reads the deck's memory, so it starts only once pending updates are saved
+    # (or have failed).
+    beginOutputBlock(BLOCK_NOTICE, 'Waiting for the learning memory update\u2026')
+    setOutputBlockBody(plainTextToHtml(
+        "Today's forgotten cards are being added to the learning memory."
+        ' The summary starts as soon as this finishes.'
+    ))
+    waitToken = object()
+    _state['memoryUpdateWait'] = waitToken
+    _memoryUpdateQueue.callWhenDeckTreeIdle(
+        deckName,
+        partial(_onMemoryUpdateWaitOver, mode, waitToken),
+    )
+
+
+def _onMemoryUpdateWaitOver(mode: str, waitToken: object) -> None:
+    # A different token means the page was left or re-rendered while waiting.
+    if _state.get('memoryUpdateWait') is not waitToken:
+        return
+    del _state['memoryUpdateWait']
+    setOutputBlockTitle('Learning memory update finished')
+    _requestTodayStudy(mode)
+
+
+def _requestTodayStudy(mode: str) -> None:
     config = mw.addonManager.getConfig(__name__) or {}
     if not hasApiKey(config):
         showMissingApiKeyFailure('Cannot summarise')
@@ -337,6 +375,8 @@ def onRenderComparedAnswer(
     initialProvided: str,
     typePattern: str,
 ) -> str:
+    # Kept for every typed card (matching or not), in case it is rated again.
+    _state['typedAnswer'] = initialProvided
     if answersMatch(initialExpected, initialProvided):
         _state.pop('card', None)
         return output
@@ -346,48 +386,71 @@ def onRenderComparedAnswer(
     return output
 
 
-def _onMemoryUpdateSuccess(text: str, worker: AiModelWorker, deckName: str) -> None:
-    points = parseMemoryResponse(text, MAX_MEMORY_POINTS)
-    if points is not None:
-        saveDeckMemory(deckName, points)
-
-
-def startMemoryUpdate(card: Card, ease: int) -> None:
+def _createMemoryUpdateTask(deckName: str, buildPrompt: Callable[..., str]) -> Optional[MemoryUpdateTask]:
+    # Model and keys are captured now; the queue reads the deck's memory when the task starts.
     config = mw.addonManager.getConfig(__name__) or {}
     geminiApiKey: str = config.get('apiKey', '').strip()
     claudeApiKey: str = config.get('claudeApiKey', '').strip()
     if not geminiApiKey and not claudeApiKey:
-        return
-    modelIds = getModelIds(config)
-
-    deckName = getDeckName(card)
-    prompt = buildMemoryUpdatePrompt(
-        card = card,
-        question = stripHtml(card.question()),
-        expectedAnswer = normalizeText(_state.get('expected', '')),
-        userAnswer = _state.get('provided', ''),
-        aiResponse = _state.get('lastAiResponse', ''),
-        ease = ease,
-    )
-
-    worker = createModelWorker(
-        modelId = modelIds[0],
+        return None
+    return MemoryUpdateTask(
+        deckName = deckName,
+        buildPrompt = buildPrompt,
+        modelId = getModelIds(config)[0],
         geminiApiKey = geminiApiKey,
         claudeApiKey = claudeApiKey,
-        prompt = prompt,
-        generationConfig = MEMORY_GENERATION_CONFIG,
     )
-    if worker is None:
+
+
+def startMemoryUpdate(card: Card, ease: int) -> None:
+    task = _createMemoryUpdateTask(
+        deckName = getDeckName(card),
+        buildPrompt = partial(
+            buildMemoryUpdatePrompt,
+            question = stripHtml(card.question()),
+            expectedAnswer = normalizeText(_state.get('expected', '')),
+            userAnswer = _state.get('provided', ''),
+            aiResponse = _state.get('lastAiResponse', ''),
+            ease = ease,
+            cardStats = buildCardStatsBlock(card),
+        ),
+    )
+    if task is not None:
+        _memoryUpdateQueue.enqueue(task)
+
+
+def startDailyMemoryUpdate(deck: dict) -> None:
+    # Once per deck per Anki day, the first time its congrats page shows with forgotten typed
+    # cards. Queued tasks keep running when the page is left, and run after any per-card update
+    # still in flight.
+    dayCutoff: int = mw.col.sched.day_cutoff
+    if isDailyMemoryUpdateClaimed(deck['name'], dayCutoff):
         return
-    worker.success.connect(
-        lambda text, w = worker, d = deckName: _onMemoryUpdateSuccess(text, w, d)
+    candidateTasks = (
+        _createMemoryUpdateTask(
+            deckName = deckName,
+            buildPrompt = partial(
+                buildDailyMemoryUpdatePrompt,
+                deckName = deckName,
+                cardLimit = TODAY_STUDY_CARD_LIMIT,
+                cardFieldsExplanation = CARD_FIELDS_EXPLANATION,
+                cards = cards,
+            ),
+        )
+        for deckName, cards in getTodayAgainCardsByDeck(deck).items()
     )
-    worker.finished.connect(lambda w = worker: _discardBackgroundWorker(w))
-    _backgroundWorkers.append(worker)
-    worker.start()
+    tasks = [task for task in candidateTasks if task is not None]
+    # Claimed only when there is work, so a congrats page with nothing to learn from does not
+    # use up the day (e.g. forgotten cards only come later, in custom study).
+    if not tasks or not claimDailyMemoryUpdate(deck['name'], dayCutoff):
+        return
+    for task in tasks:
+        _memoryUpdateQueue.enqueue(task)
 
 
 def onReviewerDidAnswerCard(reviewer: Any, card: Card, ease: int) -> None:
+    if ease == AGAIN_EASE and 'typedAnswer' in _state:
+        saveTypedAnswer(card.id, _state['typedAnswer'])
     if _state.get('card') and _state.get('lastAiResponse'):
         startMemoryUpdate(card, ease)
     # The card is done: stop a check that is still streaming, even when no next question
@@ -436,7 +499,12 @@ def _canStartCheck() -> bool:
 
 
 def _canStartTodayStudy() -> bool:
-    return mw.state == 'overview' and 'worker' not in _state
+    return mw.state == 'overview' and 'worker' not in _state and 'memoryUpdateWait' not in _state
+
+
+def _isTodayStudyAvailable(mode: str, deck: dict) -> bool:
+    # A running memory update may be about to create the deck's first memory.
+    return isTodayStudyAvailable(mode, deck) or _memoryUpdateQueue.isDeckTreeBusy(deck['name'])
 
 
 def onReviewerWillEnd() -> None:
@@ -450,7 +518,7 @@ def onOverviewWillRenderContent(
 ) -> None:
     # A re-render replaces the page, including any summary that was streaming into it.
     resetState()
-    if isTodayStudyAvailable(MODE_PREVIEW, mw.col.decks.current()):
+    if _isTodayStudyAvailable(MODE_PREVIEW, mw.col.decks.current()):
         content.table += buildTodayStudyOverviewHtml(MODE_PREVIEW)
 
 
@@ -460,7 +528,10 @@ def onWebviewDidInjectStyleIntoPage(webview: Any) -> None:
     if webview is not mw.web or mw.state != 'overview' or not isCongratsPageUrl(webview.url().path()):
         return
     resetState()
-    if isTodayStudyAvailable(MODE_REVIEW, mw.col.decks.current()):
+    deck = mw.col.decks.current()
+    # Queued before the button is injected, so a click always finds it and waits for it.
+    startDailyMemoryUpdate(deck)
+    if _isTodayStudyAvailable(MODE_REVIEW, deck):
         injectTodayStudyButton(MODE_REVIEW)
 
 

@@ -7,6 +7,7 @@ from aqt import mw
 
 from .cardText import getCardAnswerText, getCardQuestionText, truncateText
 from .memory import EASE_LABELS, countRatings, describeLatestRatings, getDeckTreeMemory
+from .studyLog import getTypedAnswersSince
 
 # Preview runs on the deck overview while cards are still due today; review runs on the
 # "Congratulations" screen once today's cards are done.
@@ -48,6 +49,7 @@ HARD_WEIGHT: float = 0.5
 SCORE_SMOOTHING_REVIEWS: int = 3
 
 CARD_TYPE_LABELS: dict[int, str] = {0: 'new', 1: 'learning', 2: 'review', 3: 'relearning'}
+AGAIN_EASE: int = 1
 
 CONTAINER_STYLE: str = 'max-width:40em; margin:24px auto 0; padding:0 16px; text-align:center;'
 
@@ -56,7 +58,8 @@ CARD_FIELDS_EXPLANATION: str = (
     ' card\'s learning stage; "reviews" counts all past reviews, and "again" (forgot), "hard",'
     ' "good" and "easy" (effortless) count how often the learner self-graded each; "lapses"'
     ' counts how often the card was forgotten after being learned; "lastAgain" is when it was'
-    ' last forgotten.'
+    ' last forgotten. "typedAnswer", present only on cards graded again today, is what the'
+    ' learner typed the last time they forgot the card today.'
 )
 
 PREVIEW_PROMPT_TEMPLATE: str = (
@@ -84,7 +87,8 @@ REVIEW_PROMPT_TEMPLATE: str = (
     ' first. {cardFieldsExplanation} "todayRatings" lists today\'s self-grades in order.\n\n'
     '{cards}\n\n'
     'Give brief overall feedback on today\'s session in Markdown: what went well, which'
-    ' concepts or patterns caused trouble (you may name specific cards), how today relates'
+    ' concepts or patterns caused trouble (you may name specific cards, and use what the'
+    ' learner typed to pinpoint the mistake), how today relates'
     ' to the recurring weak points, and 2 or 3 concrete tips for the next session. Be concise'
     ' and encouraging, and start directly with the feedback.'
     '{languageInstruction}'
@@ -155,21 +159,35 @@ def _getDeckIds(deck: dict) -> list[int]:
     return mw.col.decks.deck_and_child_ids(deck['id'])
 
 
+def _getDayStartMs() -> int:
+    return (mw.col.sched.day_cutoff - SECONDS_PER_DAY) * 1000
+
+
 def _getTodayRatingsByCard(deckIds: list[int]) -> dict[int, list[int]]:
     # Cards studied in a filtered deck still count for their home deck (odid).
-    dayStartMs = (mw.col.sched.day_cutoff - SECONDS_PER_DAY) * 1000
     deckIdList = ids2str(deckIds)
     rows = mw.col.db.all(
         'select r.cid, r.ease from revlog r join cards c on c.id = r.cid'
         ' where r.id >= ? and r.ease between 1 and 4'
         f' and (c.did in {deckIdList} or c.odid in {deckIdList})'
         ' order by r.id',
-        dayStartMs,
+        _getDayStartMs(),
     )
     ratingsByCard: dict[int, list[int]] = {}
     for cardId, ease in rows:
         ratingsByCard.setdefault(cardId, []).append(ease)
     return ratingsByCard
+
+
+def _getTodayAgainTypedAnswers(ratingsByCard: dict[int, list[int]]) -> dict[int, str]:
+    # A typed answer is stored on every "again", but only one from today on a card that is still
+    # graded again today counts (an undone "again" leaves the answer without the rating).
+    typedAnswers = getTypedAnswersSince(_getDayStartMs())
+    return {
+        cardId: answer
+        for cardId, answer in typedAnswers.items()
+        if AGAIN_EASE in ratingsByCard.get(cardId, [])
+    }
 
 
 def isTodayStudyAvailable(mode: str, deck: dict) -> bool:
@@ -200,6 +218,7 @@ def _describeCard(
     card: Card,
     history: list[tuple[int, int]],
     todayRatings: Optional[list[int]] = None,
+    typedAnswer: Optional[str] = None,
 ) -> dict:
     counts = countRatings(history)
     description: dict = {
@@ -216,6 +235,8 @@ def _describeCard(
     }
     if todayRatings is not None:
         description['todayRatings'] = [EASE_LABELS[ease] for ease in todayRatings]
+    if typedAnswer is not None:
+        description['typedAnswer'] = truncateText(typedAnswer, CARD_TEXT_MAX_LENGTH)
     return description
 
 
@@ -239,6 +260,7 @@ def _buildPreviewPrompt(deck: dict, memory: str, languageInstruction: str) -> Op
     if not cardIds:
         return None
     historyByCard = _getReviewHistory(cardIds)
+    typedAnswers = _getTodayAgainTypedAnswers(_getTodayRatingsByCard(_getDeckIds(deck)))
     selectedIds = sorted(
         cardIds,
         key = lambda cardId: (
@@ -247,7 +269,12 @@ def _buildPreviewPrompt(deck: dict, memory: str, languageInstruction: str) -> Op
         ),
     )[:TODAY_STUDY_CARD_LIMIT]
     descriptions = [
-        _describeCard(mw.col.get_card(cardId), historyByCard[cardId]) for cardId in selectedIds
+        _describeCard(
+            mw.col.get_card(cardId),
+            historyByCard[cardId],
+            typedAnswer = typedAnswers.get(cardId),
+        )
+        for cardId in selectedIds
     ]
     return PREVIEW_PROMPT_TEMPLATE.format(
         deckName = deck['name'],
@@ -284,8 +311,14 @@ def _buildReviewPrompt(deck: dict, memory: str, languageInstruction: str) -> Opt
         ),
     )[:TODAY_STUDY_CARD_LIMIT]
     historyByCard = _getReviewHistory(selectedIds)
+    typedAnswers = _getTodayAgainTypedAnswers(ratingsByCard)
     descriptions = [
-        _describeCard(mw.col.get_card(cardId), historyByCard[cardId], ratingsByCard[cardId])
+        _describeCard(
+            mw.col.get_card(cardId),
+            historyByCard[cardId],
+            ratingsByCard[cardId],
+            typedAnswers.get(cardId),
+        )
         for cardId in selectedIds
     ]
     return REVIEW_PROMPT_TEMPLATE.format(
@@ -311,3 +344,43 @@ def buildTodayStudyPrompt(mode: str, deck: dict, language: str) -> Optional[str]
     if mode == MODE_REVIEW:
         return _buildReviewPrompt(deck, memory, languageInstruction)
     return _buildPreviewPrompt(deck, memory, languageInstruction)
+
+
+def _getHomeDeckName(card: Card) -> str:
+    # A card studied in a filtered deck belongs to its home deck (odid).
+    deck = mw.col.decks.get(card.odid or card.did)
+    return deck['name'] if deck else ''
+
+
+def getTodayAgainCardsByDeck(deck: dict) -> dict[str, str]:
+    # For the end-of-day memory update: up to TODAY_STUDY_CARD_LIMIT of the cards graded again
+    # today in the deck tree (most agains today first), as JSON grouped by home deck, since
+    # memory is kept per deck. Empty when no forgotten card has a typed answer from today.
+    ratingsByCard = _getTodayRatingsByCard(_getDeckIds(deck))
+    typedAnswers = _getTodayAgainTypedAnswers(ratingsByCard)
+    if not typedAnswers:
+        return {}
+    againIds = [cardId for cardId, ratings in ratingsByCard.items() if AGAIN_EASE in ratings]
+    selectedIds = sorted(
+        againIds,
+        key = lambda cardId: (
+            -ratingsByCard[cardId].count(AGAIN_EASE),
+            -len(ratingsByCard[cardId]),
+        ),
+    )[:TODAY_STUDY_CARD_LIMIT]
+    historyByCard = _getReviewHistory(selectedIds)
+    descriptionsByDeck: dict[str, list[dict]] = {}
+    for cardId in selectedIds:
+        card = mw.col.get_card(cardId)
+        description = _describeCard(
+            card,
+            historyByCard[cardId],
+            ratingsByCard[cardId],
+            typedAnswers.get(cardId),
+        )
+        descriptionsByDeck.setdefault(_getHomeDeckName(card), []).append(description)
+    return {
+        deckName: _formatCards(descriptions)
+        for deckName, descriptions in descriptionsByDeck.items()
+        if deckName
+    }

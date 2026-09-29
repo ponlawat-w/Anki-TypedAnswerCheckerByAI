@@ -25,7 +25,9 @@ Only the latest step is expanded. Earlier steps collapse into small one-line tit
 
 The add-on keeps a per-deck **learning memory** — a short list of your recurring mistakes and weak points. Whenever you run an AI check on a card and then rate it (Again/Hard/Good/Easy), a background request asks your first configured model to update that deck's memory based on the question, your answer, the AI's feedback, your rating, and your review history. The update runs silently and never interrupts your review.
 
-On every subsequent AI check, the deck's memory is appended to the prompt so the AI can personalise its feedback and emphasise your known weak points. The memory notes are kept in English internally but the AI is instructed to keep responding in the language of your prompt. Memory is stored in `user_files/memory.json` and is independent of your other settings (resetting settings does not clear it). You can wipe it from the config dialog with **Clear learning memory (all decks)**.
+Whenever you rate a typed-answer card **Again**, the add-on also logs what you typed (only your latest answer per card is kept). When you finish a deck and its **Congratulations** screen first appears that day, the add-on takes up to 25 of the cards you forgot today, with what you typed, and asks your first configured model to update the memory from them. This runs at most once per deck per day, only when at least one forgotten card has a typed answer from today, and keeps running in the background if you leave the screen. It uses the same model as the per-card update.
+
+On every subsequent AI check, the deck's memory is appended to the prompt so the AI can personalise its feedback and emphasise your known weak points. The memory notes are kept in English internally but the AI is instructed to keep responding in the language of your prompt. Memory is stored in `user_files/memory.json`, and the typed-answer log in `user_files/studyLog.db` (SQLite); both are independent of your other settings (resetting settings does not clear them). You can wipe the memory (not the typed-answer log) from the config dialog with **Clear learning memory (all decks)**.
 
 ### Today's study
 
@@ -34,7 +36,7 @@ When you open a deck (click it on the home screen, or press **S**), the deck ove
 - **Preview Today's Study** — while cards are still due today. The add-on picks up to 25 of today's due cards you have struggled with most (ranked by how often you graded them Again, and to a lesser degree Hard, relative to their number of reviews), and asks the AI for a short list of concepts to keep in mind today, based on those cards and the deck's learning memory. The preview describes concepts only and does not reveal card questions or answers.
 - **Review Today's Study** — on the "Congratulations" screen once today's cards are done. The add-on picks up to 25 of the cards you studied today, filling the list with today's Again cards first, then Hard, Good and Easy, and asks the AI for overall feedback on the session: what went well, what caused trouble, and tips for next time.
 
-Press **I** (for "AI insight") instead of clicking the button; it also triggers **Retry** after a failure. Anki does not use this key on the deck overview. The summary streams below the button like an answer check, using the same model list and fallback. Parent decks include their subdecks. The button only appears when the deck has learning memory (run some AI checks first) and, for the review, when you have studied cards in it today. Summaries never use web search and do not change the learning memory.
+Press **I** (for "AI insight") instead of clicking the button; it also triggers **Retry** after a failure. Anki does not use this key on the deck overview. The summary streams below the button like an answer check, using the same model list and fallback. Parent decks include their subdecks. The button only appears when the deck has learning memory (run some AI checks first) and, for the review, when you have studied cards in it today. Summaries never use web search and do not change the learning memory. For cards you graded **Again** today, the summary also sees what you typed, so it can point at the exact mistake. If you ask for a summary while a learning memory update is still running (e.g. right after finishing the deck), a "Waiting for the learning memory update…" step appears. The summary starts once the update finishes, and it uses the updated memory.
 
 Summaries are written in the deck's **Today's Study summary language** (see Configuration). It is free text, so you can write things like `Thai` or `English, with Japanese words in kana`.
 
@@ -47,7 +49,7 @@ Summaries are written in the deck's **Today's Study summary language** (see Conf
 - Renders the AI response as formatted HTML (supports bold, italic, lists, links, code blocks, headers)
 - Shows a **Retry** button on API errors
 - Per-deck and per-card-type prompt overrides — different decks or note type/card combinations can use different prompts
-- Per-deck learning memory that records recurring weak points and personalises future checks
+- Per-deck learning memory that records recurring weak points and personalises future checks, refreshed once a day from the cards you forgot and what you typed
 - AI preview of today's study (before you start) and review of today's session (when you finish) on the deck overview, with keyboard shortcut **I**
 - Config dialog accessible from **Tools > Add-ons**
 
