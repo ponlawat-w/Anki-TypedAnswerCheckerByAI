@@ -22,6 +22,10 @@ ADAPTIVE_THINKING_SUFFIX = "-adaptive-thinking"
 # is rejected with a 400, so they always run adaptive thinking.
 ALWAYS_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-", "claude-opus-5-5")
 
+# Models that reject thinking:{"type":"disabled"} but turn off up-front thinking with
+# {"type":"between_tools"} (accepted at the default "high" effort or below).
+BETWEEN_TOOLS_THINKING_PREFIXES = ("claude-sonnet-5-5",)
+
 # The basic web search version works on every Claude model (including Haiku 4.5) and
 # calls search directly, so the stream carries no code-execution blocks.
 WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
@@ -52,6 +56,8 @@ def buildThinkingConfig(realModelId: str, adaptiveThinking: bool) -> dict:
     if adaptiveThinking or realModelId.startswith(ALWAYS_THINKING_PREFIXES):
         # Current models default to "omitted" (empty thinking text); ask for readable summaries.
         return {"type": "adaptive", "display": "summarized"}
+    if realModelId.startswith(BETWEEN_TOOLS_THINKING_PREFIXES):
+        return {"type": "between_tools"}
     return {"type": "disabled"}
 
 
