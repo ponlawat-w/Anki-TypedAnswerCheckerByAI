@@ -59,7 +59,10 @@ CARD_FIELDS_EXPLANATION: str = (
     ' "good" and "easy" (effortless) count how often the learner self-graded each; "lapses"'
     ' counts how often the card was forgotten after being learned; "lastAgain" is when it was'
     ' last forgotten. "typedAnswer", present only on cards graded again today, is what the'
-    ' learner typed the last time they forgot the card today.'
+    ' learner typed the last time they forgot the card today; an empty string means they'
+    ' submitted nothing (could not recall anything). A card graded again today without'
+    ' "typedAnswer" is a card the learner answers by recalling and flipping, with nothing'
+    ' typed, or one whose typed answer was not recorded: never treat it as an empty answer.'
 )
 
 PREVIEW_PROMPT_TEMPLATE: str = (
