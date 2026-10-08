@@ -142,6 +142,8 @@ Any model ID supported by the Gemini API or the Anthropic Claude API can be ente
 **Claude** (Claude API key)
 
 - `claude-haiku-4-5`
+- `claude-haiku-5-5`
+- `claude-haiku-5-5-adaptive-thinking`
 - `claude-sonnet-5`
 - `claude-sonnet-5-adaptive-thinking`
 - `claude-sonnet-5-5`
@@ -152,4 +154,4 @@ Any model ID supported by the Gemini API or the Anthropic Claude API can be ente
 - `claude-fable-5-adaptive-thinking`
 - `claude-fable-5-1-adaptive-thinking`
 
-Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning), and a summary of that thinking is shown while it runs. Haiku 4.5 has no adaptive-thinking mode; Opus 5.5, Fable 5 and Fable 5.1 always think, so only their `-adaptive-thinking` presets are listed. Sonnet 5.5 cannot switch thinking off completely: without the suffix it skips up-front thinking and only writes short progress notes between web searches. You can also add these suffixes to any custom Claude model ID.
+Claude models run with thinking **off** by default. A model ID ending in `-adaptive-thinking` runs the same model with Claude's adaptive thinking enabled (slower and more expensive, but more reasoning), and a summary of that thinking is shown while it runs. Haiku 4.5 has no adaptive-thinking mode (Haiku 5.5 does); Opus 5.5, Fable 5 and Fable 5.1 always think, so only their `-adaptive-thinking` presets are listed. Sonnet 5.5 cannot switch thinking off completely: without the suffix it skips up-front thinking and only writes short progress notes between web searches. You can also add these suffixes to any custom Claude model ID.

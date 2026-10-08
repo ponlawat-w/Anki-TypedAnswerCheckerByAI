@@ -43,6 +43,8 @@ PRESET_MODELS: list[str] = [
     'gemini-3.8-flash',
     'gemini-3.1-pro-preview',
     'claude-haiku-4-5',
+    'claude-haiku-5-5',
+    'claude-haiku-5-5-adaptive-thinking',
     'claude-sonnet-5',
     'claude-sonnet-5-adaptive-thinking',
     'claude-sonnet-5-5',
